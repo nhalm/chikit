@@ -1,6 +1,12 @@
 # chikit
 
-Production-grade Chi middleware library for distributed systems. Follows 12-factor app principles with all configuration via code or environment variables.
+[![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://go.dev/doc/install)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nhalm/chikit.svg)](https://pkg.go.dev/github.com/nhalm/chikit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Production-grade Chi middleware library for distributed systems. Part of the *kit ecosystem (alongside [pgxkit](https://github.com/nhalm/pgxkit)) providing focused, high-quality Go libraries.
+
+Follows 12-factor app principles with all configuration via explicit parameters—no config files, no environment variable access in middleware.
 
 ## Features
 
@@ -137,7 +143,7 @@ r.Use(headers.New("X-API-Key", "api_key"))
 // With validation
 r.Use(headers.New("X-Correlation-ID", "correlation_id",
     headers.Required(),
-    headers.WithValidator(func(val string) (interface{}, error) {
+    headers.WithValidator(func(val string) (any, error) {
         if len(val) < 10 {
             return nil, errors.New("correlation ID too short")
         }
@@ -171,7 +177,7 @@ import (
 // Extract X-Tenant-ID header as UUID with validation
 r.Use(headers.New("X-Tenant-ID", "tenant_id",
     headers.Required(),
-    headers.WithValidator(func(val string) (interface{}, error) {
+    headers.WithValidator(func(val string) (any, error) {
         return uuid.Parse(val)
     }),
 ))
@@ -217,7 +223,7 @@ func main() {
 
     // Extract tenant ID from header
     r.Use(headers.New("X-Tenant-ID", "tenant_id",
-        headers.WithValidator(func(val string) (interface{}, error) {
+        headers.WithValidator(func(val string) (any, error) {
             return uuid.Parse(val)
         }),
     ))
@@ -268,6 +274,41 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 ```
 
 
+## Testing
+
+Run tests:
+```bash
+make test
+```
+
+Run tests with race detector:
+```bash
+make test-race
+```
+
+Run tests with coverage:
+```bash
+make test-cover
+```
+
+Run Redis integration tests (requires Docker):
+```bash
+make test-redis
+```
+
+Run all checks (format, vet, lint, test):
+```bash
+make check
+```
+
+## Development
+
+This project requires Go 1.24+ and follows modern Go idioms:
+- Uses `any` instead of `interface{}`
+- Leverages generics where appropriate
+- Follows 12-factor app principles
+- No global state or singletons
+
 ## Roadmap
 
 ### Phase 2: Security & Error Handling
@@ -280,6 +321,14 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 - Bearer token extraction
 - SLO tracking (latency percentiles, error rates)
 - OpenTelemetry integration
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+- All tests pass (`make check`)
+- Code follows Go conventions
+- New features include tests and documentation
+- No breaking changes without major version bump
 
 ## License
 

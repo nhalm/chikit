@@ -11,7 +11,8 @@
       "Bash(go mod tidy:*)",
       "Bash(tree:*)",
       "Bash(go tool cover:*)",
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "Bash(make test:*)"
     ],
     "deny": [],
     "ask": []
