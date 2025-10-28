@@ -12,7 +12,13 @@
       "Bash(tree:*)",
       "Bash(go tool cover:*)",
       "Bash(go doc:*)",
-      "Bash(make test:*)"
+      "Bash(make test:*)",
+      "Bash(gh run view:*)",
+      "WebFetch(domain:golangci-lint.run)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []
