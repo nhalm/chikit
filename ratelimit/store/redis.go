@@ -48,6 +48,7 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 	}, nil
 }
 
+// Increment increments the counter for the given key and returns the new count, TTL, and any error.
 func (r *Redis) Increment(ctx context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	fullKey := r.prefix + key
 
@@ -65,6 +66,7 @@ func (r *Redis) Increment(ctx context.Context, key string, window time.Duration)
 	return incr.Val(), ttl, nil
 }
 
+// Get retrieves the current count for the given key without incrementing.
 func (r *Redis) Get(ctx context.Context, key string) (int64, error) {
 	val, err := r.client.Get(ctx, r.prefix+key).Int64()
 	if err == redis.Nil {
@@ -76,6 +78,7 @@ func (r *Redis) Get(ctx context.Context, key string) (int64, error) {
 	return val, nil
 }
 
+// Reset removes the counter for the given key.
 func (r *Redis) Reset(ctx context.Context, key string) error {
 	if err := r.client.Del(ctx, r.prefix+key).Err(); err != nil {
 		return fmt.Errorf("redis reset failed: %w", err)
@@ -83,6 +86,7 @@ func (r *Redis) Reset(ctx context.Context, key string) error {
 	return nil
 }
 
+// Close releases resources held by the Redis client.
 func (r *Redis) Close() error {
 	return r.client.Close()
 }
