@@ -65,3 +65,12 @@ formatters:
   enable:
     - gofmt
     - goimports
+
+issues:
+  exclude-files:
+    - ".*_test\\.go$"
+  exclude-linters-for-files:
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+        - staticcheck
