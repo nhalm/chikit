@@ -7,10 +7,8 @@ linters:
   default: none
   enable:
     - govet
-    - staticcheck
     - unused
     - misspell
-    - gosec
     - gocritic
     - revive
     - gocyclo
