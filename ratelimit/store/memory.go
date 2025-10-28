@@ -30,6 +30,7 @@ func NewMemory() *Memory {
 	return m
 }
 
+// Increment increments the counter for the given key and returns the new count, TTL, and any error.
 func (m *Memory) Increment(_ context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -51,6 +52,7 @@ func (m *Memory) Increment(_ context.Context, key string, window time.Duration) 
 	return entry.count, ttl, nil
 }
 
+// Get retrieves the current count for the given key without incrementing.
 func (m *Memory) Get(_ context.Context, key string) (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -63,6 +65,7 @@ func (m *Memory) Get(_ context.Context, key string) (int64, error) {
 	return entry.count, nil
 }
 
+// Reset removes the counter for the given key.
 func (m *Memory) Reset(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -71,6 +74,7 @@ func (m *Memory) Reset(_ context.Context, key string) error {
 	return nil
 }
 
+// Close releases resources held by the memory store.
 func (m *Memory) Close() error {
 	close(m.stopCh)
 	return nil
