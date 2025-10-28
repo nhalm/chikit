@@ -37,7 +37,7 @@ func TestBasicHeaderExtraction(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			if tt.headerVal != "" {
 				req.Header.Set("X-Custom-Header", tt.headerVal)
 			}
@@ -84,11 +84,11 @@ func TestRequiredHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := New("X-Required-Header", "required_key", Required())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := New("X-Required-Header", "required_key", Required())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			if tt.headerVal != "" {
 				req.Header.Set("X-Required-Header", tt.headerVal)
 			}
@@ -139,7 +139,7 @@ func TestDefaultValues(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			if tt.headerVal != "" {
 				req.Header.Set("X-Header", tt.headerVal)
 			}
@@ -203,7 +203,7 @@ func TestValidation(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			req.Header.Set("X-Validated", tt.headerVal)
 			rr := httptest.NewRecorder()
 
@@ -330,7 +330,7 @@ func TestMultipleOptions(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			if tt.headerVal != "" {
 				req.Header.Set("X-Multi", tt.headerVal)
 			}
@@ -366,7 +366,7 @@ func TestChainedMiddleware(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.Header.Set("X-Header-1", "value1")
 	req.Header.Set("X-Header-2", "value2")
 	rr := httptest.NewRecorder()

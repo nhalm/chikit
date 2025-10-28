@@ -16,11 +16,11 @@ func TestByIP(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByIP(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByIP(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
 
 	for i := 0; i < 2; i++ {
@@ -46,11 +46,11 @@ func TestByHeader(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.Header.Set("X-API-Key", "test-key")
 
 	for i := 0; i < 3; i++ {
@@ -72,11 +72,11 @@ func TestByHeaderMissing(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByHeader(st, "X-API-Key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByHeader(st, "X-API-Key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
 
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -89,11 +89,11 @@ func TestByEndpoint(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByEndpoint(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByEndpoint(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("POST", "/api/v1/users", nil)
+	req := httptest.NewRequest("POST", "/api/v1/users", http.NoBody)
 
 	for i := 0; i < 2; i++ {
 		rr := httptest.NewRecorder()
@@ -117,14 +117,14 @@ func TestBuilderMultiDimensional(t *testing.T) {
 	handler := ratelimit.NewBuilder(st).
 		WithIP().
 		WithEndpoint().
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req1 := httptest.NewRequest("POST", "/api/v1/users", nil)
+	req1 := httptest.NewRequest("POST", "/api/v1/users", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
 
-	req2 := httptest.NewRequest("GET", "/api/v1/users", nil)
+	req2 := httptest.NewRequest("GET", "/api/v1/users", http.NoBody)
 	req2.RemoteAddr = "192.168.1.1:1234"
 
 	for i := 0; i < 2; i++ {
@@ -155,15 +155,15 @@ func TestBuilderWithHeader(t *testing.T) {
 	handler := ratelimit.NewBuilder(st).
 		WithIP().
 		WithHeader("X-Tenant-ID").
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req1 := httptest.NewRequest("GET", "/test", nil)
+	req1 := httptest.NewRequest("GET", "/test", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
 	req1.Header.Set("X-Tenant-ID", "tenant-a")
 
-	req2 := httptest.NewRequest("GET", "/test", nil)
+	req2 := httptest.NewRequest("GET", "/test", http.NoBody)
 	req2.RemoteAddr = "192.168.1.1:1234"
 	req2.Header.Set("X-Tenant-ID", "tenant-b")
 
@@ -192,11 +192,11 @@ func TestRateLimitHeaders(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByIP(st, 5, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByIP(st, 5, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
 
 	rr := httptest.NewRecorder()
@@ -226,7 +226,7 @@ func TestConcurrentSameKey(t *testing.T) {
 		concurrency = 100
 	)
 
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -244,7 +244,7 @@ func TestConcurrentSameKey(t *testing.T) {
 
 			<-startCh
 
-			req := httptest.NewRequest("GET", "/test", nil)
+			req := httptest.NewRequest("GET", "/test", http.NoBody)
 			req.RemoteAddr = "192.168.1.1:1234"
 			rr := httptest.NewRecorder()
 
@@ -289,7 +289,7 @@ func TestConcurrentMultipleKeys(t *testing.T) {
 		numKeys     = 5
 	)
 
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -319,7 +319,7 @@ func TestConcurrentMultipleKeys(t *testing.T) {
 
 				<-startCh
 
-				req := httptest.NewRequest("GET", "/test", nil)
+				req := httptest.NewRequest("GET", "/test", http.NoBody)
 				req.RemoteAddr = i64ToString(int64(keyIdx)) + ":1234"
 				rr := httptest.NewRecorder()
 
@@ -369,7 +369,7 @@ func TestConcurrentBuilderMultiDimensional(t *testing.T) {
 	handler := ratelimit.NewBuilder(st).
 		WithIP().
 		WithEndpoint().
-		Limit(limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Limit(limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -404,7 +404,7 @@ func TestConcurrentBuilderMultiDimensional(t *testing.T) {
 
 					<-startCh
 
-					req := httptest.NewRequest(tc.method, tc.path, nil)
+					req := httptest.NewRequest(tc.method, tc.path, http.NoBody)
 					req.RemoteAddr = tc.ip + ":1234"
 					rr := httptest.NewRecorder()
 
@@ -447,7 +447,7 @@ func TestConcurrentRaceDetection(t *testing.T) {
 		duration    = 500 * time.Millisecond
 	)
 
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -468,7 +468,7 @@ func TestConcurrentRaceDetection(t *testing.T) {
 				case <-stopCh:
 					return
 				default:
-					req := httptest.NewRequest("GET", "/test", nil)
+					req := httptest.NewRequest("GET", "/test", http.NoBody)
 					req.RemoteAddr = i64ToString(int64(i%10)) + ":1234"
 					rr := httptest.NewRecorder()
 
@@ -499,7 +499,7 @@ func TestConcurrentHeaderBased(t *testing.T) {
 		concurrency = 75
 	)
 
-	handler := ratelimit.ByHeader(st, "X-API-Key", limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ratelimit.ByHeader(st, "X-API-Key", limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -524,7 +524,7 @@ func TestConcurrentHeaderBased(t *testing.T) {
 
 					<-startCh
 
-					req := httptest.NewRequest("GET", "/test", nil)
+					req := httptest.NewRequest("GET", "/test", http.NoBody)
 					req.Header.Set("X-API-Key", apiKey)
 					rr := httptest.NewRecorder()
 

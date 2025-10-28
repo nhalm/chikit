@@ -42,7 +42,7 @@ func WithValidator(fn func(string) (any, error)) Option {
 }
 
 // New creates middleware that extracts a header and stores it in context.
-func New(header string, ctxKey string, opts ...Option) func(http.Handler) http.Handler {
+func New(header, ctxKey string, opts ...Option) func(http.Handler) http.Handler {
 	h := &HeaderToContext{
 		header: header,
 		ctxKey: contextKey(ctxKey),

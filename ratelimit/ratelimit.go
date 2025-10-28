@@ -49,10 +49,7 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		remaining := l.limit - count
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(0, l.limit-count)
 
 		resetTime := time.Now().Add(ttl).Unix()
 

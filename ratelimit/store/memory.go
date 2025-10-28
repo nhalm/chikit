@@ -30,7 +30,7 @@ func NewMemory() *Memory {
 	return m
 }
 
-func (m *Memory) Increment(ctx context.Context, key string, window time.Duration) (int64, time.Duration, error) {
+func (m *Memory) Increment(_ context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -47,14 +47,11 @@ func (m *Memory) Increment(ctx context.Context, key string, window time.Duration
 	}
 
 	entry.count++
-	ttl := time.Until(entry.expiration)
-	if ttl < 0 {
-		ttl = 0
-	}
+	ttl := max(0, time.Until(entry.expiration))
 	return entry.count, ttl, nil
 }
 
-func (m *Memory) Get(ctx context.Context, key string) (int64, error) {
+func (m *Memory) Get(_ context.Context, key string) (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -66,7 +63,7 @@ func (m *Memory) Get(ctx context.Context, key string) (int64, error) {
 	return entry.count, nil
 }
 
-func (m *Memory) Reset(ctx context.Context, key string) error {
+func (m *Memory) Reset(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

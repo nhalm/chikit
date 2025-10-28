@@ -12,15 +12,59 @@ linters:
     - misspell      # Spelling errors
     - gosec         # Security checks
     - gocritic      # Code quality
+    - revive        # Fast, configurable linter
+    - gocyclo       # Cyclomatic complexity
+    - goimports     # Check imports formatting
+    - ineffassign   # Detect ineffective assignments
+    - unconvert     # Remove unnecessary type conversions
+    - unparam       # Find unused function parameters
+    - wastedassign  # Find wasted assignments
+    - prealloc      # Find slice declarations that could be preallocated
 
 linters-settings:
   gocritic:
     enabled-tags:
       - diagnostic
       - performance
+      - style
+      - opinionated
     disabled-checks:
       - commentFormatting
       - unlambda
+      - whyNoLint
+      - unnamedResult
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  gocyclo:
+    min-complexity: 15
+
+  unparam:
+    check-exported: false
 
 issues:
   exclude-rules:

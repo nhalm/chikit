@@ -60,10 +60,7 @@ func (r *Redis) Increment(ctx context.Context, key string, window time.Duration)
 		return 0, 0, fmt.Errorf("redis increment failed: %w", err)
 	}
 
-	ttl := ttlCmd.Val()
-	if ttl < 0 {
-		ttl = window
-	}
+	ttl := max(window, ttlCmd.Val())
 
 	return incr.Val(), ttl, nil
 }
