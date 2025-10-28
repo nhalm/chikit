@@ -274,62 +274,6 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 ```
 
 
-## Testing
-
-Run tests:
-```bash
-make test
-```
-
-Run tests with race detector:
-```bash
-make test-race
-```
-
-Run tests with coverage:
-```bash
-make test-cover
-```
-
-Run Redis integration tests (requires Docker):
-```bash
-make test-redis
-```
-
-Run all checks (format, vet, lint, test):
-```bash
-make check
-```
-
-## Development
-
-This project requires Go 1.24+ and follows modern Go idioms:
-- Uses `any` instead of `interface{}`
-- Leverages generics where appropriate
-- Follows 12-factor app principles
-- No global state or singletons
-
-## Roadmap
-
-### Phase 2: Security & Error Handling
-- Error response sanitization
-- Query parameter validation
-- Request size limits
-
-### Phase 3: Authentication & Observability
-- API key validation
-- Bearer token extraction
-- SLO tracking (latency percentiles, error rates)
-- OpenTelemetry integration
-
-## Contributing
-
-Contributions are welcome! Please ensure:
-- All tests pass (`make check`)
-- Code follows Go conventions
-- New features include tests and documentation
-- No breaking changes without major version bump
-
 ## License
 
 MIT
