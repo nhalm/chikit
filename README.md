@@ -124,35 +124,13 @@ Retry-After: 60
 
 ## Header Management
 
-### Tenant ID Middleware
-
-Compatible with paymentlinks pattern:
-
-```go
-import "github.com/nhalm/chikit/headers"
-
-// Extract X-Tenant-ID header as UUID
-r.Use(headers.TenantID(true, ""))
-
-// With default tenant ID for development
-r.Use(headers.TenantID(false, "00000000-0000-0000-0000-000000000001"))
-
-// Retrieve in handler
-func handler(w http.ResponseWriter, r *http.Request) {
-    tenantID, ok := headers.TenantIDFromContext(r.Context())
-    if !ok {
-        http.Error(w, "No tenant ID", http.StatusBadRequest)
-        return
-    }
-    // Use tenantID...
-}
-```
-
 ### Generic Header to Context
 
 Extract any header with validation:
 
 ```go
+import "github.com/nhalm/chikit/headers"
+
 // Simple header extraction
 r.Use(headers.New("X-API-Key", "api_key"))
 
@@ -182,6 +160,34 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+### Example: Tenant ID as UUID
+
+```go
+import (
+    "github.com/google/uuid"
+    "github.com/nhalm/chikit/headers"
+)
+
+// Extract X-Tenant-ID header as UUID with validation
+r.Use(headers.New("X-Tenant-ID", "tenant_id",
+    headers.Required(),
+    headers.WithValidator(func(val string) (interface{}, error) {
+        return uuid.Parse(val)
+    }),
+))
+
+// Retrieve in handler
+func handler(w http.ResponseWriter, r *http.Request) {
+    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    if !ok {
+        http.Error(w, "No tenant ID", http.StatusBadRequest)
+        return
+    }
+    tenantID := val.(uuid.UUID)
+    // Use tenantID...
+}
+```
+
 ## Complete Example
 
 ```go
@@ -194,6 +200,7 @@ import (
 
     "github.com/go-chi/chi/v5"
     "github.com/go-chi/chi/v5/middleware"
+    "github.com/google/uuid"
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
@@ -209,7 +216,11 @@ func main() {
     r.Use(middleware.Recoverer)
 
     // Extract tenant ID from header
-    r.Use(headers.TenantID(false, "00000000-0000-0000-0000-000000000001"))
+    r.Use(headers.New("X-Tenant-ID", "tenant_id",
+        headers.WithValidator(func(val string) (interface{}, error) {
+            return uuid.Parse(val)
+        }),
+    ))
 
     // Redis store
     st, err := store.NewRedis(store.RedisConfig{
@@ -242,13 +253,15 @@ func main() {
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
-    tenantID, _ := headers.TenantIDFromContext(r.Context())
+    val, _ := headers.FromContext(r.Context(), "tenant_id")
+    tenantID := val.(uuid.UUID)
     // Query users for tenant...
     w.Write([]byte("Users for tenant: " + tenantID.String()))
 }
 
 func createUser(w http.ResponseWriter, r *http.Request) {
-    tenantID, _ := headers.TenantIDFromContext(r.Context())
+    val, _ := headers.FromContext(r.Context(), "tenant_id")
+    tenantID := val.(uuid.UUID)
     // Create user for tenant...
     w.WriteHeader(http.StatusCreated)
 }

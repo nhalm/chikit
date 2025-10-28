@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:pkg.go.dev)",
+      "Read(//private/tmp/paymentlinks/**)",
+      "Bash(go mod init:*)",
+      "Bash(go get:*)",
+      "Bash(go test:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(tree:*)",
+      "Bash(go tool cover:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "outputStyle": "default"
+}

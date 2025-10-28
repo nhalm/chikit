@@ -1,0 +1,33 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck      # Unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Vet examines Go source code
+    - staticcheck   # Static analysis
+    - unused        # Find unused code
+    - gofmt         # Check formatting
+    - misspell      # Spelling errors
+    - gosec         # Security checks
+    - gocritic      # Code quality
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - commentFormatting
+      - unlambda
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - goconst
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
