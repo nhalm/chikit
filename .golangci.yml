@@ -1,29 +1,27 @@
-version: 2
+version: "2"
 
 run:
   timeout: 5m
 
 linters:
+  default: none
   enable:
     - errcheck      # Unchecked errors
     - gosimple      # Simplify code
     - govet         # Vet examines Go source code
     - staticcheck   # Static analysis
     - unused        # Find unused code
-    - gofmt         # Check formatting
     - misspell      # Spelling errors
     - gosec         # Security checks
     - gocritic      # Code quality
     - revive        # Fast, configurable linter
     - gocyclo       # Cyclomatic complexity
-    - goimports     # Check imports formatting
     - ineffassign   # Detect ineffective assignments
     - unconvert     # Remove unnecessary type conversions
     - unparam       # Find unused function parameters
     - wastedassign  # Find wasted assignments
     - prealloc      # Find slice declarations that could be preallocated
-
-linters-settings:
+  settings:
   gocritic:
     enabled-tags:
       - diagnostic
@@ -67,6 +65,11 @@ linters-settings:
 
   unparam:
     check-exported: false
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 issues:
   exclude-rules:
