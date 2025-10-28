@@ -1,3 +1,22 @@
+// Package ratelimit provides flexible rate limiting middleware for Chi and standard http.Handler.
+//
+// It supports multiple rate limiting strategies including IP-based, header-based,
+// endpoint-based, and query parameter-based limiting. For complex scenarios,
+// use the fluent Builder API to combine multiple dimensions.
+//
+// Simple API example:
+//
+//	store := store.NewMemory()
+//	defer store.Close()
+//	r.Use(ratelimit.ByIP(store, 100, time.Minute))
+//
+// Advanced multi-dimensional example:
+//
+//	limiter := ratelimit.NewBuilder(store).
+//		WithIP().
+//		WithHeader("X-Tenant-ID").
+//		Limit(100, time.Minute)
+//	r.Use(limiter)
 package ratelimit
 
 import (

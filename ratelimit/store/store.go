@@ -1,3 +1,25 @@
+// Package store provides storage backends for rate limiting.
+//
+// The Store interface allows different storage implementations
+// to be used with the rate limiter. Use Memory for development
+// and single-instance deployments, or Redis for distributed
+// deployments in Kubernetes.
+//
+// Example with in-memory store:
+//
+//	store := store.NewMemory()
+//	defer store.Close()
+//
+// Example with Redis:
+//
+//	store, err := store.NewRedis(store.RedisConfig{
+//		URL:    "localhost:6379",
+//		Prefix: "ratelimit:",
+//	})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer store.Close()
 package store
 
 import (

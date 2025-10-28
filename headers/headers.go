@@ -1,3 +1,25 @@
+// Package headers provides middleware for extracting and validating HTTP headers.
+//
+// This package offers flexible header extraction with support for required headers,
+// default values, and custom validation/transformation functions.
+//
+// Basic example:
+//
+//	middleware := headers.New("X-API-Key", "api_key", headers.Required())
+//	r.Use(middleware)
+//
+// With validation:
+//
+//	validator := func(val string) (any, error) {
+//		id, err := uuid.Parse(val)
+//		if err != nil {
+//			return nil, err
+//		}
+//		return id, nil
+//	}
+//	middleware := headers.New("X-Tenant-ID", "tenant_id",
+//		headers.Required(),
+//		headers.WithValidator(validator))
 package headers
 
 import (
