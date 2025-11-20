@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -260,14 +261,15 @@ func MaxLength(maxLen int) func(string) error {
 	}
 }
 
-// Pattern is a validator that checks if a value matches a pattern.
+// Pattern is a validator that checks if a value matches a regex pattern.
 func Pattern(pattern string) func(string) error {
+	re := regexp.MustCompile(pattern)
 	return func(val string) error {
 		matched, err := url.QueryUnescape(val)
 		if err != nil {
 			return fmt.Errorf("invalid value")
 		}
-		if !strings.Contains(matched, pattern) {
+		if !re.MatchString(matched) {
 			return fmt.Errorf("must match pattern: %s", pattern)
 		}
 		return nil

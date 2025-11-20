@@ -268,3 +268,78 @@ func TestHeaders_DenyListFails(t *testing.T) {
 		t.Error("should return error message for denied value")
 	}
 }
+
+func TestPattern_ValidRegex(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/?email=test@example.com", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	middleware := validate.QueryParams(
+		validate.Param("email", validate.WithValidator(validate.Pattern(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`))),
+	)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestPattern_InvalidRegex(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/?email=invalid-email", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	middleware := validate.QueryParams(
+		validate.Param("email", validate.WithValidator(validate.Pattern(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`))),
+	)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "must match pattern") {
+		t.Errorf("should return error message for pattern mismatch, got: %s", rec.Body.String())
+	}
+}
+
+func TestPattern_NumericPattern(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/?id=12345", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	middleware := validate.QueryParams(
+		validate.Param("id", validate.WithValidator(validate.Pattern(`^\d+$`))),
+	)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestPattern_NumericPatternFails(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/?id=abc123", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	middleware := validate.QueryParams(
+		validate.Param("id", validate.WithValidator(validate.Pattern(`^\d+$`))),
+	)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}

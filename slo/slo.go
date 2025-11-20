@@ -2,6 +2,7 @@
 package slo
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"sync"
@@ -134,6 +135,7 @@ type TrackConfig struct {
 	Metrics  *Metrics
 	Exporter MetricsExporter
 	Interval time.Duration
+	ctx      context.Context
 }
 
 // Track returns middleware that tracks SLO metrics.
@@ -142,6 +144,7 @@ func Track(metrics *Metrics, opts ...TrackOption) func(http.Handler) http.Handle
 		Metrics:  metrics,
 		Exporter: nil,
 		Interval: 60 * time.Second,
+		ctx:      context.Background(),
 	}
 
 	for _, opt := range opts {
@@ -152,8 +155,13 @@ func Track(metrics *Metrics, opts ...TrackOption) func(http.Handler) http.Handle
 		go func() {
 			ticker := time.NewTicker(config.Interval)
 			defer ticker.Stop()
-			for range ticker.C {
-				config.Exporter(config.Metrics.Stats())
+			for {
+				select {
+				case <-config.ctx.Done():
+					return
+				case <-ticker.C:
+					config.Exporter(config.Metrics.Stats())
+				}
 			}
 		}()
 	}
@@ -181,6 +189,14 @@ func WithExporter(exporter MetricsExporter, interval time.Duration) TrackOption 
 	return func(c *TrackConfig) {
 		c.Exporter = exporter
 		c.Interval = interval
+	}
+}
+
+// WithContext sets the context for the exporter goroutine.
+// When the context is canceled, the exporter stops.
+func WithContext(ctx context.Context) TrackOption {
+	return func(c *TrackConfig) {
+		c.ctx = ctx
 	}
 }
 
