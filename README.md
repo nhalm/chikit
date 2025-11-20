@@ -14,6 +14,8 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
 - **Error Sanitization**: Strip sensitive information from error responses
+- **Authentication**: API key and bearer token validation with custom validators
+- **SLO Tracking**: Latency percentiles, error rates, and availability monitoring
 - **Zero Config Files**: Pure code configuration, environment variable support
 - **Distributed-Ready**: Redis backend for Kubernetes deployments
 - **Fluent API**: Chainable, readable middleware configuration
@@ -317,6 +319,92 @@ r.Use(validate.Headers(
 ))
 ```
 
+## Authentication
+
+### API Key Authentication
+
+Validate API keys with custom validators:
+
+```go
+import "github.com/nhalm/chikit/auth"
+
+// Simple validator
+validator := func(key string) bool {
+    return key == "secret-key"
+}
+
+r.Use(auth.APIKey(validator))
+
+// Custom header
+r.Use(auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-Key")))
+
+// Optional API key
+r.Use(auth.APIKey(validator, auth.OptionalAPIKey()))
+
+// Retrieve in handler
+func handler(w http.ResponseWriter, r *http.Request) {
+    key, ok := auth.APIKeyFromContext(r.Context())
+    if ok {
+        // Use API key
+    }
+}
+```
+
+### Bearer Token Authentication
+
+Validate bearer tokens from Authorization headers:
+
+```go
+// JWT validator example
+validator := func(token string) bool {
+    // Validate JWT, check expiry, etc.
+    return validateJWT(token)
+}
+
+r.Use(auth.BearerToken(validator))
+
+// Optional bearer token
+r.Use(auth.BearerToken(validator, auth.OptionalBearerToken()))
+
+// Retrieve in handler
+func handler(w http.ResponseWriter, r *http.Request) {
+    token, ok := auth.BearerTokenFromContext(r.Context())
+    if ok {
+        // Use bearer token
+    }
+}
+```
+
+## SLO Tracking
+
+Track service level objectives with latency percentiles and error rates:
+
+```go
+import "github.com/nhalm/chikit/slo"
+
+// Create metrics tracker
+metrics := slo.NewMetrics(1000) // Keep last 1000 latencies
+
+// Track all requests
+r.Use(slo.Track(metrics))
+
+// Export metrics periodically
+exporter := func(stats slo.Stats) {
+    log.Printf("Availability: %.2f%%", stats.Availability*100)
+    log.Printf("Error rate: %.2f%%", stats.ErrorRate*100)
+    log.Printf("P50: %v, P95: %v, P99: %v",
+        stats.Latency.P50, stats.Latency.P95, stats.Latency.P99)
+}
+
+r.Use(slo.Track(metrics, slo.WithExporter(exporter, 60*time.Second)))
+
+// Get current stats
+stats := metrics.Stats()
+fmt.Printf("Total requests: %d\n", stats.TotalRequests)
+fmt.Printf("Error requests: %d\n", stats.ErrorRequests)
+fmt.Printf("P99 latency: %v\n", stats.Latency.P99)
+```
+
 ## Complete Example
 
 ```go
@@ -330,10 +418,12 @@ import (
     "github.com/go-chi/chi/v5"
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
+    "github.com/nhalm/chikit/auth"
     "github.com/nhalm/chikit/errors"
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
+    "github.com/nhalm/chikit/slo"
     "github.com/nhalm/chikit/validate"
 )
 
@@ -351,6 +441,10 @@ func main() {
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
+
+    // SLO tracking
+    metrics := slo.NewMetrics(1000)
+    r.Use(slo.Track(metrics))
 
     // Validate environment header
     r.Use(validate.Headers(
@@ -383,6 +477,11 @@ func main() {
 
     // API routes
     r.Route("/api/v1", func(r chi.Router) {
+        // API key authentication
+        r.Use(auth.APIKey(func(key string) bool {
+            return validateAPIKey(key) // Your validation logic
+        }))
+
         // Per-tenant rate limiting: 100 requests per minute
         r.Use(ratelimit.NewBuilder(st).
             WithIP().
@@ -400,6 +499,11 @@ func main() {
     })
 
     log.Fatal(http.ListenAndServe(":8080", r))
+}
+
+func validateAPIKey(key string) bool {
+    // Implement your API key validation
+    return true
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
