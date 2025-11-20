@@ -1,4 +1,25 @@
 // Package validate provides middleware for request validation.
+//
+// The package offers validation for query parameters, headers, and request body size.
+// All validation middleware returns 400 (Bad Request) for validation failures, except
+// MaxBodySize which returns 413 (Payload Too Large) by default.
+//
+// Query parameter validation:
+//
+//	r.Use(validate.QueryParams(
+//		validate.Param("page", validate.Required(), validate.WithValidator(validate.Pattern(`^\d+$`))),
+//		validate.Param("limit", validate.WithDefault("10")),
+//	))
+//
+// Header validation:
+//
+//	r.Use(validate.Headers(
+//		validate.Header("Content-Type", validate.RequiredHeader(), validate.WithAllowList("application/json")),
+//	))
+//
+// Body size limiting:
+//
+//	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
 package validate
 
 import (
@@ -11,13 +32,30 @@ import (
 
 // MaxBodySizeConfig configures the MaxBodySize middleware.
 type MaxBodySizeConfig struct {
-	MaxBytes   int64
+	// MaxBytes is the maximum allowed request body size in bytes
+	MaxBytes int64
+
+	// StatusCode is the HTTP status code to return when limit is exceeded (default: 413)
 	StatusCode int
-	Message    string
+
+	// Message is the error message to return when limit is exceeded
+	Message string
 }
 
 // MaxBodySize returns middleware that limits request body size.
-// Returns 413 (Payload Too Large) when the limit is exceeded.
+// Uses http.MaxBytesReader which wraps the request body and prevents reading beyond
+// the specified limit. When the limit is exceeded, returns 413 (Payload Too Large)
+// by default. The limit is applied before the request reaches downstream handlers.
+//
+// Example:
+//
+//	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
+//
+// With custom status code and message:
+//
+//	r.Use(validate.MaxBodySize(1024,
+//		validate.WithBodySizeStatus(http.StatusBadRequest),
+//		validate.WithBodySizeMessage("Request too large")))
 func MaxBodySize(maxBytes int64, opts ...MaxBodySizeOption) func(http.Handler) http.Handler {
 	config := MaxBodySizeConfig{
 		MaxBytes:   maxBytes,
@@ -56,13 +94,37 @@ func WithBodySizeMessage(msg string) MaxBodySizeOption {
 
 // QueryParamRule defines validation rules for a query parameter.
 type QueryParamRule struct {
-	Name      string
-	Required  bool
+	// Name is the query parameter name to validate
+	Name string
+
+	// Required indicates whether the parameter must be present
+	Required bool
+
+	// Validator is an optional custom validation function
 	Validator func(string) error
-	Default   string
+
+	// Default is the value to use if the parameter is missing (only used when Required is false)
+	Default string
 }
 
-// QueryParams returns middleware that validates query parameters.
+// QueryParams returns middleware that validates query parameters according to the given rules.
+// For each rule, checks if the parameter is present (when required), applies the validator
+// (if provided), and sets default values (when specified). Returns 400 (Bad Request) if
+// validation fails.
+//
+// IMPORTANT: This middleware modifies the request URL by setting default values for missing
+// parameters. The modified URL is available to downstream handlers via r.URL.Query().
+//
+// Note: If both Required and Default are set, Default is ignored since the parameter
+// must be present.
+//
+// Example:
+//
+//	r.Use(validate.QueryParams(
+//		validate.Param("page", validate.Required(), validate.WithValidator(validate.Pattern(`^\d+$`))),
+//		validate.Param("limit", validate.WithDefault("10"), validate.WithValidator(validate.MinLength(1))),
+//		validate.Param("sort", validate.WithValidator(validate.OneOf("asc", "desc"))),
+//	))
 func QueryParams(rules ...QueryParamRule) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +166,7 @@ func Required() func(*QueryParamRule) {
 }
 
 // WithDefault sets a default value for a query parameter.
+// The default is only applied when the parameter is missing and Required is false.
 func WithDefault(val string) func(*QueryParamRule) {
 	return func(r *QueryParamRule) {
 		r.Default = val
@@ -111,6 +174,7 @@ func WithDefault(val string) func(*QueryParamRule) {
 }
 
 // WithValidator sets a validation function for a query parameter.
+// The validator receives the parameter value and should return an error if invalid.
 func WithValidator(fn func(string) error) func(*QueryParamRule) {
 	return func(r *QueryParamRule) {
 		r.Validator = fn
@@ -128,14 +192,36 @@ func Param(name string, opts ...func(*QueryParamRule)) QueryParamRule {
 
 // HeaderRule defines validation rules for a header.
 type HeaderRule struct {
-	Name          string
-	Required      bool
-	AllowedList   []string
-	DeniedList    []string
+	// Name is the HTTP header name to validate
+	Name string
+
+	// Required indicates whether the header must be present
+	Required bool
+
+	// AllowedList is a list of allowed values (empty means any value is allowed)
+	AllowedList []string
+
+	// DeniedList is a list of denied values
+	DeniedList []string
+
+	// CaseSensitive determines whether value comparisons are case-sensitive (default: false)
 	CaseSensitive bool
 }
 
-// Headers returns middleware that validates request headers.
+// Headers returns middleware that validates request headers according to the given rules.
+// For each rule, checks if the header is present (when required), validates against
+// allow/deny lists, and enforces case sensitivity settings. Returns 400 (Bad Request)
+// if a required header is missing, or 403 (Forbidden) if a value is not allowed or is denied.
+//
+// Example:
+//
+//	r.Use(validate.Headers(
+//		validate.Header("Content-Type",
+//			validate.RequiredHeader(),
+//			validate.WithAllowList("application/json", "application/xml")),
+//		validate.Header("X-Custom-Header",
+//			validate.WithDenyList("forbidden-value")),
+//	))
 func Headers(rules ...HeaderRule) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +295,7 @@ func RequiredHeader() func(*HeaderRule) {
 }
 
 // WithAllowList sets the list of allowed values for a header.
+// If set, only values in this list are permitted. Returns 403 if the value is not in the list.
 func WithAllowList(values ...string) func(*HeaderRule) {
 	return func(r *HeaderRule) {
 		r.AllowedList = values
@@ -216,13 +303,15 @@ func WithAllowList(values ...string) func(*HeaderRule) {
 }
 
 // WithDenyList sets the list of denied values for a header.
+// If set, values in this list are explicitly forbidden. Returns 403 if the value is in the list.
 func WithDenyList(values ...string) func(*HeaderRule) {
 	return func(r *HeaderRule) {
 		r.DeniedList = values
 	}
 }
 
-// CaseSensitive makes header value comparisons case-sensitive (default: false).
+// CaseSensitive makes header value comparisons case-sensitive.
+// By default, comparisons are case-insensitive.
 func CaseSensitive() func(*HeaderRule) {
 	return func(r *HeaderRule) {
 		r.CaseSensitive = true
@@ -262,6 +351,7 @@ func MaxLength(maxLen int) func(string) error {
 }
 
 // Pattern is a validator that checks if a value matches a regex pattern.
+// The value is URL-decoded before matching, allowing validation of encoded query parameters.
 func Pattern(pattern string) func(string) error {
 	re := regexp.MustCompile(pattern)
 	return func(val string) error {

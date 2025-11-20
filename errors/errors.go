@@ -1,4 +1,29 @@
 // Package errors provides middleware for sanitizing error responses.
+//
+// SECURITY: This middleware prevents leaking sensitive internal information in error
+// responses by removing stack traces, file paths, and other implementation details.
+// Critical for production deployments to avoid exposing internal application structure,
+// source code locations, or debug information that could aid attackers.
+//
+// The middleware buffers error responses (4xx/5xx status codes) and applies
+// configurable sanitization rules before sending to the client. Success responses
+// (2xx/3xx) pass through without buffering for optimal performance.
+//
+// Basic usage (strips stack traces and file paths):
+//
+//	r.Use(errors.Sanitize())
+//
+// Custom configuration:
+//
+//	r.Use(errors.Sanitize(
+//		errors.WithStackTraces(true),  // Strip stack traces
+//		errors.WithFilePaths(true),     // Strip file paths
+//		errors.WithReplacementMessage("An error occurred"),
+//	))
+//
+// Example transformations:
+//   - Before: "panic: runtime error at /app/internal/handler.go:42"
+//   - After:  "Internal Server Error"
 package errors
 
 import (
@@ -11,14 +36,23 @@ import (
 )
 
 var (
+	// stackTracePattern matches common stack trace formats from Go panics and error libraries
 	stackTracePattern = regexp.MustCompile(`(?m)^\s*at\s+.*$|^\s*goroutine\s+\d+.*$|^\s*\S+\.go:\d+.*$`)
-	filePathPattern   = regexp.MustCompile(`(/[a-zA-Z0-9_\-./]+\.go:\d+)|([A-Z]:\\[a-zA-Z0-9_\-\\./]+\.go:\d+)`)
+
+	// filePathPattern matches absolute file paths (Unix and Windows) with line numbers
+	filePathPattern = regexp.MustCompile(`(/[a-zA-Z0-9_\-./]+\.go:\d+)|([A-Z]:\\[a-zA-Z0-9_\-\\./]+\.go:\d+)`)
 )
 
+// SanitizeConfig configures the Sanitize middleware.
 type SanitizeConfig struct {
+	// StripStackTraces removes stack trace lines from error responses (default: true)
 	StripStackTraces bool
-	StripFilePaths   bool
-	ReplacementMsg   string
+
+	// StripFilePaths removes file paths and line numbers from error responses (default: true)
+	StripFilePaths bool
+
+	// ReplacementMsg is shown when all content is stripped (default: "Internal Server Error")
+	ReplacementMsg string
 }
 
 type sanitizeWriter struct {
@@ -86,7 +120,29 @@ func (sw *sanitizeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // Sanitize returns middleware that sanitizes error responses by removing sensitive information.
-// By default, it strips both stack traces and file paths from 4xx/5xx responses.
+// Only error responses (4xx/5xx status codes) are processed; success responses pass through
+// unchanged for performance. The middleware buffers error responses to apply sanitization
+// before sending to the client.
+//
+// SECURITY IMPLICATIONS:
+//   - Prevents exposure of internal file structure and source code locations
+//   - Removes stack traces that could reveal application logic and dependencies
+//   - Protects against information disclosure vulnerabilities
+//   - Ensures consistent, safe error messages for clients
+//
+// By default, strips both stack traces and file paths from error responses.
+// Use options to customize behavior.
+//
+// Example:
+//
+//	r.Use(errors.Sanitize())
+//
+// With custom settings:
+//
+//	r.Use(errors.Sanitize(
+//		errors.WithStackTraces(false),  // Keep stack traces (dev only!)
+//		errors.WithReplacementMessage("Service unavailable"),
+//	))
 func Sanitize(opts ...SanitizeOption) func(http.Handler) http.Handler {
 	config := SanitizeConfig{
 		StripStackTraces: true,
@@ -117,6 +173,8 @@ func Sanitize(opts ...SanitizeOption) func(http.Handler) http.Handler {
 type SanitizeOption func(*SanitizeConfig)
 
 // WithStackTraces controls whether stack traces are stripped (default: true).
+// Set to false only in development environments where debugging information is needed.
+// NEVER disable in production.
 func WithStackTraces(strip bool) SanitizeOption {
 	return func(c *SanitizeConfig) {
 		c.StripStackTraces = strip
@@ -124,13 +182,17 @@ func WithStackTraces(strip bool) SanitizeOption {
 }
 
 // WithFilePaths controls whether file paths are stripped (default: true).
+// Set to false only in development environments where debugging information is needed.
+// NEVER disable in production.
 func WithFilePaths(strip bool) SanitizeOption {
 	return func(c *SanitizeConfig) {
 		c.StripFilePaths = strip
 	}
 }
 
-// WithReplacementMessage sets the message to use when all content is stripped (default: "Internal Server Error").
+// WithReplacementMessage sets the message to use when all content is stripped.
+// This message is shown when sanitization removes all error content, providing
+// a safe, generic error message to clients. Default: "Internal Server Error".
 func WithReplacementMessage(msg string) SanitizeOption {
 	return func(c *SanitizeConfig) {
 		c.ReplacementMsg = msg

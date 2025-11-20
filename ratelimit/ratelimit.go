@@ -1,8 +1,9 @@
 // Package ratelimit provides flexible rate limiting middleware for Chi and standard http.Handler.
 //
-// It supports multiple rate limiting strategies including IP-based, header-based,
-// endpoint-based, and query parameter-based limiting. For complex scenarios,
-// use the fluent Builder API to combine multiple dimensions.
+// The package offers two API styles: a simple API for common use cases (ByIP, ByHeader, etc.)
+// and a fluent Builder API for complex multi-dimensional rate limiting scenarios. All middleware
+// sets standard rate limit headers (RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset) and
+// returns 429 (Too Many Requests) when limits are exceeded.
 //
 // Simple API example:
 //
@@ -17,6 +18,10 @@
 //		WithHeader("X-Tenant-ID").
 //		Limit(100, time.Minute)
 //	r.Use(limiter)
+//
+// Rate limiting is automatically skipped when the key function returns an empty string.
+// For distributed deployments (Kubernetes), use the Redis store. The in-memory store
+// is only suitable for single-instance deployments and development.
 package ratelimit
 
 import (
@@ -31,6 +36,7 @@ import (
 )
 
 // KeyFunc extracts a rate limiting key from an HTTP request.
+// Returning an empty string skips rate limiting for that request.
 type KeyFunc func(*http.Request) string
 
 // Limiter implements rate limiting middleware.
@@ -43,6 +49,11 @@ type Limiter struct {
 
 // New creates a new rate limiter with the given store, limit, and window.
 // The keyFn determines what to rate limit by (IP, header, etc.).
+// Returns 429 (Too Many Requests) when the limit is exceeded, with standard
+// rate limit headers and a Retry-After header indicating seconds until reset.
+// Returns 500 (Internal Server Error) if the store operation fails.
+//
+// If keyFn returns an empty string, rate limiting is skipped for that request.
 func New(st store.Store, limit int, window time.Duration, keyFn KeyFunc) *Limiter {
 	return &Limiter{
 		store:  st,
@@ -53,6 +64,11 @@ func New(st store.Store, limit int, window time.Duration, keyFn KeyFunc) *Limite
 }
 
 // Handler returns the rate limiting middleware.
+// Sets the following headers on every request:
+//   - RateLimit-Limit: The rate limit ceiling for the current window
+//   - RateLimit-Remaining: Number of requests remaining in the current window
+//   - RateLimit-Reset: Unix timestamp when the current window resets
+//   - Retry-After: (only when limited) Seconds until the window resets
 func (l *Limiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := l.keyFn(r)
@@ -86,7 +102,14 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 	})
 }
 
-// ByIP creates a simple IP-based rate limiter.
+// ByIP creates IP-based rate limiting middleware.
+// Uses the RemoteAddr from the request to determine the client IP.
+// The generated key format is "ip:<address>".
+//
+// Example:
+//
+//	store := store.NewMemory()
+//	r.Use(ratelimit.ByIP(store, 100, time.Minute)) // 100 requests per minute per IP
 func ByIP(st store.Store, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := New(st, limit, window, func(r *http.Request) string {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -98,7 +121,13 @@ func ByIP(st store.Store, limit int, window time.Duration) func(http.Handler) ht
 	return limiter.Handler
 }
 
-// ByHeader creates a simple header-based rate limiter.
+// ByHeader creates header-based rate limiting middleware.
+// If the specified header is missing, rate limiting is skipped for that request.
+// The generated key format is "header:<name>:<value>".
+//
+// Example:
+//
+//	r.Use(ratelimit.ByHeader(store, "X-API-Key", 1000, time.Hour))
 func ByHeader(st store.Store, header string, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := New(st, limit, window, func(r *http.Request) string {
 		val := r.Header.Get(header)
@@ -110,7 +139,13 @@ func ByHeader(st store.Store, header string, limit int, window time.Duration) fu
 	return limiter.Handler
 }
 
-// ByEndpoint creates a simple endpoint-based rate limiter.
+// ByEndpoint creates endpoint-based rate limiting middleware.
+// Combines the HTTP method and URL path to create a unique key per endpoint.
+// The generated key format is "endpoint:<method>:<path>".
+//
+// Example:
+//
+//	r.Use(ratelimit.ByEndpoint(store, 50, time.Minute)) // 50 req/min per endpoint
 func ByEndpoint(st store.Store, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := New(st, limit, window, func(r *http.Request) string {
 		return "endpoint:" + r.Method + ":" + r.URL.Path
@@ -118,7 +153,13 @@ func ByEndpoint(st store.Store, limit int, window time.Duration) func(http.Handl
 	return limiter.Handler
 }
 
-// ByQueryParam creates a simple query parameter-based rate limiter.
+// ByQueryParam creates query parameter-based rate limiting middleware.
+// If the specified query parameter is missing, rate limiting is skipped for that request.
+// The generated key format is "query:<param>:<value>".
+//
+// Example:
+//
+//	r.Use(ratelimit.ByQueryParam(store, "api_key", 500, time.Hour))
 func ByQueryParam(st store.Store, param string, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := New(st, limit, window, func(r *http.Request) string {
 		val := r.URL.Query().Get(param)
@@ -130,7 +171,22 @@ func ByQueryParam(st store.Store, param string, limit int, window time.Duration)
 	return limiter.Handler
 }
 
-// Builder provides a fluent API for building complex rate limiters.
+// Builder provides a fluent API for building complex multi-dimensional rate limiters.
+// Each With* method adds a dimension to the rate limiting key. All dimensions are
+// combined with ":" as a separator. If any dimension returns an empty string,
+// rate limiting is skipped for that request.
+//
+// Example:
+//
+//	limiter := ratelimit.NewBuilder(store).
+//		WithIP().
+//		WithHeader("X-Tenant-ID").
+//		WithEndpoint().
+//		Limit(100, time.Minute)
+//	r.Use(limiter)
+//
+// This creates a composite key like "192.168.1.1:tenant-abc:GET:/api/users"
+// allowing fine-grained rate limiting per IP, tenant, and endpoint combination.
 type Builder struct {
 	store  store.Store
 	limit  int
@@ -139,6 +195,7 @@ type Builder struct {
 }
 
 // NewBuilder creates a new rate limiter builder.
+// Use With* methods to add dimensions, then call Limit to build the middleware.
 func NewBuilder(st store.Store) *Builder {
 	return &Builder{
 		store:  st,
@@ -147,6 +204,7 @@ func NewBuilder(st store.Store) *Builder {
 }
 
 // WithIP adds IP address to the rate limiting key.
+// Extracts the IP from RemoteAddr, removing the port if present.
 func (b *Builder) WithIP() *Builder {
 	b.keyFns = append(b.keyFns, func(r *http.Request) string {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -159,6 +217,7 @@ func (b *Builder) WithIP() *Builder {
 }
 
 // WithEndpoint adds endpoint (method + path) to the rate limiting key.
+// The key component format is "<method>:<path>".
 func (b *Builder) WithEndpoint() *Builder {
 	b.keyFns = append(b.keyFns, func(r *http.Request) string {
 		return r.Method + ":" + r.URL.Path
@@ -167,6 +226,8 @@ func (b *Builder) WithEndpoint() *Builder {
 }
 
 // WithHeader adds a header value to the rate limiting key.
+// If the header is missing, returns an empty string which causes
+// rate limiting to be skipped for that request.
 func (b *Builder) WithHeader(header string) *Builder {
 	b.keyFns = append(b.keyFns, func(r *http.Request) string {
 		return r.Header.Get(header)
@@ -175,6 +236,8 @@ func (b *Builder) WithHeader(header string) *Builder {
 }
 
 // WithQueryParam adds a query parameter value to the rate limiting key.
+// If the parameter is missing, returns an empty string which causes
+// rate limiting to be skipped for that request.
 func (b *Builder) WithQueryParam(param string) *Builder {
 	b.keyFns = append(b.keyFns, func(r *http.Request) string {
 		return r.URL.Query().Get(param)
@@ -183,12 +246,20 @@ func (b *Builder) WithQueryParam(param string) *Builder {
 }
 
 // WithCustomKey adds a custom key function to the rate limiting key.
+// The function should return an empty string to skip rate limiting for a request.
+// Useful for custom extraction logic or computed values.
 func (b *Builder) WithCustomKey(fn KeyFunc) *Builder {
 	b.keyFns = append(b.keyFns, fn)
 	return b
 }
 
 // Limit sets the rate limit and window, returning the middleware handler.
+// All configured dimensions are combined into a single key using ":" as a separator.
+// If any dimension returns an empty string, rate limiting is skipped for that request.
+//
+// Parameters:
+//   - limit: Maximum number of requests allowed in the time window
+//   - window: Duration of the time window (e.g., time.Minute, time.Hour)
 func (b *Builder) Limit(limit int, window time.Duration) func(http.Handler) http.Handler {
 	b.limit = limit
 	b.window = window

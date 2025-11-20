@@ -8,23 +8,44 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Redis is a Redis-backed implementation of Store.
-// Suitable for distributed deployments in Kubernetes.
+// Redis is a Redis-backed implementation of Store suitable for distributed deployments.
+// Uses Redis atomic operations (INCR, EXPIRE) to ensure rate limit accuracy across
+// multiple instances in Kubernetes or other distributed environments. All operations
+// use pipelining for efficiency while maintaining atomicity.
 type Redis struct {
 	client *redis.Client
 	prefix string
 }
 
 // RedisConfig holds configuration for Redis connection.
-// Populate from environment variables in your application code.
+// All fields should be populated explicitly by your application code from environment
+// variables, config files, or other sources. Never reads environment variables directly.
 type RedisConfig struct {
-	URL      string
+	// URL is the Redis server address (e.g., "localhost:6379")
+	URL string
+
+	// Password for Redis authentication (optional, leave empty if not needed)
 	Password string
-	DB       int
-	Prefix   string
+
+	// DB is the Redis database number (0-15, default: 0)
+	DB int
+
+	// Prefix is prepended to all keys to namespace rate limit data (default: "ratelimit:")
+	Prefix string
 }
 
 // NewRedis creates a Redis store with the given configuration.
+// Validates the connection with a ping before returning. Returns an error if
+// the connection cannot be established within 5 seconds.
+//
+// Example:
+//
+//	store, err := store.NewRedis(store.RedisConfig{
+//		URL:      "localhost:6379",
+//		Password: "",
+//		DB:       0,
+//		Prefix:   "ratelimit:",
+//	})
 func NewRedis(config RedisConfig) (*Redis, error) {
 	if config.Prefix == "" {
 		config.Prefix = "ratelimit:"
@@ -48,7 +69,10 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 	}, nil
 }
 
-// Increment increments the counter for the given key and returns the new count, TTL, and any error.
+// Increment atomically increments the counter for the given key using Redis INCR and EXPIRENX.
+// Uses pipelining to execute INCR, EXPIRENX, and TTL as a single atomic operation,
+// ensuring accurate rate limiting under high concurrent load across multiple instances.
+// Returns the new count, time remaining until window reset, and any error.
 func (r *Redis) Increment(ctx context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	fullKey := r.prefix + key
 
@@ -67,6 +91,7 @@ func (r *Redis) Increment(ctx context.Context, key string, window time.Duration)
 }
 
 // Get retrieves the current count for the given key without incrementing.
+// Returns 0 if the key doesn't exist or has expired.
 func (r *Redis) Get(ctx context.Context, key string) (int64, error) {
 	val, err := r.client.Get(ctx, r.prefix+key).Int64()
 	if err == redis.Nil {
@@ -86,7 +111,7 @@ func (r *Redis) Reset(ctx context.Context, key string) error {
 	return nil
 }
 
-// Close releases resources held by the Redis client.
+// Close releases the Redis client connection.
 func (r *Redis) Close() error {
 	return r.client.Close()
 }

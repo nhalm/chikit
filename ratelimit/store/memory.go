@@ -11,8 +11,19 @@ type memoryEntry struct {
 	expiration time.Time
 }
 
-// Memory is an in-memory implementation of Store.
-// Suitable for single-instance deployments and development.
+// Memory is an in-memory implementation of Store using a map with mutex protection.
+//
+// WARNING: This implementation is NOT suitable for distributed deployments.
+// In Kubernetes or any multi-instance environment, each instance maintains its own
+// separate in-memory state, meaning rate limits are NOT shared across instances.
+// This can allow clients to exceed the intended rate limit by distributing requests
+// across multiple instances.
+//
+// Use Memory only for:
+//   - Local development and testing
+//   - Single-instance deployments where horizontal scaling is not needed
+//
+// For production distributed systems, use the Redis store instead.
 type Memory struct {
 	mu      sync.RWMutex
 	entries map[string]*memoryEntry
@@ -20,6 +31,8 @@ type Memory struct {
 }
 
 // NewMemory creates a new in-memory store with automatic cleanup of expired entries.
+// A background goroutine runs every minute to remove expired entries and prevent
+// unbounded memory growth. Call Close when done to stop the cleanup goroutine.
 func NewMemory() *Memory {
 	m := &Memory{
 		entries: make(map[string]*memoryEntry),
@@ -30,7 +43,9 @@ func NewMemory() *Memory {
 	return m
 }
 
-// Increment increments the counter for the given key and returns the new count, TTL, and any error.
+// Increment atomically increments the counter for the given key and returns the new count, TTL, and any error.
+// If the key doesn't exist or has expired, creates a new entry with count=1.
+// The operation is atomic due to the write lock, ensuring accuracy under concurrent load.
 func (m *Memory) Increment(_ context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -53,6 +68,7 @@ func (m *Memory) Increment(_ context.Context, key string, window time.Duration) 
 }
 
 // Get retrieves the current count for the given key without incrementing.
+// Returns 0 if the key doesn't exist or has expired.
 func (m *Memory) Get(_ context.Context, key string) (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -74,7 +90,7 @@ func (m *Memory) Reset(_ context.Context, key string) error {
 	return nil
 }
 
-// Close releases resources held by the memory store.
+// Close stops the background cleanup goroutine and releases resources.
 func (m *Memory) Close() error {
 	close(m.stopCh)
 	return nil
