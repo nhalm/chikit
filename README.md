@@ -12,6 +12,8 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
+- **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
+- **Error Sanitization**: Strip sensitive information from error responses
 - **Zero Config Files**: Pure code configuration, environment variable support
 - **Distributed-Ready**: Redis backend for Kubernetes deployments
 - **Fluent API**: Chainable, readable middleware configuration
@@ -194,6 +196,127 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+## Error Sanitization
+
+Strip sensitive information from error responses to prevent information leakage:
+
+```go
+import "github.com/nhalm/chikit/errors"
+
+// Default: strips stack traces and file paths from 4xx/5xx responses
+r.Use(errors.Sanitize())
+
+// Custom configuration
+r.Use(errors.Sanitize(
+    errors.WithStackTraces(true),  // Strip stack traces (default: true)
+    errors.WithFilePaths(true),    // Strip file paths (default: true)
+    errors.WithReplacementMessage("An error occurred"),
+))
+```
+
+The sanitizer automatically:
+- Buffers error responses (4xx/5xx status codes)
+- Removes stack traces (goroutine info, line numbers)
+- Strips file paths (Unix and Windows formats)
+- Preserves user-facing error messages
+- Returns replacement message if all content stripped
+
+## Request Validation
+
+### Body Size Limits
+
+Prevent DoS attacks by limiting request body size:
+
+```go
+import "github.com/nhalm/chikit/validate"
+
+// Limit request body to 1MB
+r.Use(validate.MaxBodySize(1024 * 1024))
+
+// With custom error message
+r.Use(validate.MaxBodySize(1024 * 1024,
+    validate.WithBodySizeMessage("Payload exceeds 1MB limit"),
+))
+```
+
+### Query Parameter Validation
+
+Validate query parameters with inline rules:
+
+```go
+// Single parameter with validation
+r.Use(validate.QueryParams(
+    validate.Param("limit",
+        validate.Required(),
+        validate.WithDefault("10"),
+        validate.WithValidator(validate.OneOf("10", "25", "50", "100")),
+    ),
+))
+
+// Multiple parameters with different rules
+r.Use(validate.QueryParams(
+    validate.Param("page", validate.WithDefault("1")),
+    validate.Param("search", validate.WithValidator(validate.MinLength(3))),
+    validate.Param("sort", validate.WithValidator(validate.OneOf("name", "date", "price"))),
+))
+
+// Custom validator
+r.Use(validate.QueryParams(
+    validate.Param("id", validate.WithValidator(func(val string) error {
+        if _, err := strconv.Atoi(val); err != nil {
+            return errors.New("must be a number")
+        }
+        return nil
+    })),
+))
+```
+
+Built-in validators:
+- `OneOf(values...)` - Value must be in list
+- `MinLength(n)` - Minimum string length
+- `MaxLength(n)` - Maximum string length
+- `Pattern(pattern)` - Regex pattern match
+
+### Header Validation
+
+Validate headers with allow/deny lists:
+
+```go
+// Required header
+r.Use(validate.Headers(
+    validate.Header("X-API-Key", validate.RequiredHeader()),
+))
+
+// Allow list (only specific values allowed)
+r.Use(validate.Headers(
+    validate.Header("X-Environment",
+        validate.WithAllowList("production", "staging", "development"),
+    ),
+))
+
+// Deny list (block specific values)
+r.Use(validate.Headers(
+    validate.Header("X-Source",
+        validate.WithDenyList("blocked-client", "banned-user"),
+    ),
+))
+
+// Case-sensitive validation (default: case-insensitive)
+r.Use(validate.Headers(
+    validate.Header("X-Auth-Token",
+        validate.WithAllowList("Bearer", "Basic"),
+        validate.CaseSensitive(),
+    ),
+))
+
+// Multiple header rules
+r.Use(validate.Headers(
+    validate.Header("X-API-Key", validate.RequiredHeader()),
+    validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
+    validate.Header("X-Source", validate.WithDenyList("blocked")),
+))
+```
+
 ## Complete Example
 
 ```go
@@ -207,9 +330,11 @@ import (
     "github.com/go-chi/chi/v5"
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
+    "github.com/nhalm/chikit/errors"
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
+    "github.com/nhalm/chikit/validate"
 )
 
 func main() {
@@ -220,6 +345,19 @@ func main() {
     r.Use(middleware.RealIP)
     r.Use(middleware.Logger)
     r.Use(middleware.Recoverer)
+
+    // Sanitize errors to prevent information leakage
+    r.Use(errors.Sanitize())
+
+    // Limit request body size to 10MB
+    r.Use(validate.MaxBodySize(10 * 1024 * 1024))
+
+    // Validate environment header
+    r.Use(validate.Headers(
+        validate.Header("X-Environment",
+            validate.WithAllowList("production", "staging", "development"),
+        ),
+    ))
 
     // Extract tenant ID from header
     r.Use(headers.New("X-Tenant-ID", "tenant_id",
@@ -250,6 +388,12 @@ func main() {
             WithIP().
             WithHeader("X-Tenant-ID").
             Limit(100, time.Minute))
+
+        // Validate query parameters
+        r.Use(validate.QueryParams(
+            validate.Param("page", validate.WithDefault("1")),
+            validate.Param("limit", validate.WithDefault("25")),
+        ))
 
         r.Get("/users", listUsers)
         r.Post("/users", createUser)
