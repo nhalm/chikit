@@ -401,13 +401,3 @@ func TestConcurrentSameKey(t *testing.T) {
 		t.Errorf("total requests should be %d, got %d", concurrency, allowedCount+deniedCount)
 	}
 }
-
-func i64ToString(n int64) string {
-	if n < 0 {
-		return "-" + i64ToString(-n)
-	}
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	return i64ToString(n/10) + string(rune('0'+n%10))
-}

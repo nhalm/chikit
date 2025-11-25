@@ -279,7 +279,7 @@ func TestBearerToken_InvalidFormat(t *testing.T) {
 }
 
 func TestBearerToken_EmptyToken(t *testing.T) {
-	validator := func(token string) bool {
+	validator := func(_ string) bool {
 		return false
 	}
 
