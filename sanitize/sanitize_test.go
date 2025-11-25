@@ -1,4 +1,4 @@
-package errors_test
+package sanitize_test
 
 import (
 	"net/http"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nhalm/chikit/errors"
+	"github.com/nhalm/chikit/sanitize"
 )
 
 func TestSanitize_SuccessResponse(t *testing.T) {
@@ -18,7 +18,7 @@ func TestSanitize_SuccessResponse(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -43,7 +43,7 @@ func TestSanitize_ErrorWithStackTrace(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
@@ -68,7 +68,7 @@ func TestSanitize_ErrorWithFilePath(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -89,7 +89,7 @@ func TestSanitize_4xxErrors(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -114,7 +114,7 @@ func TestSanitize_WithStackTracesDisabled(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize(errors.WithStackTraces(false))
+	middleware := sanitize.New(sanitize.WithStackTraces(false))
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -135,7 +135,7 @@ func TestSanitize_WithFilePathsDisabled(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize(errors.WithFilePaths(false))
+	middleware := sanitize.New(sanitize.WithFilePaths(false))
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -157,7 +157,7 @@ func TestSanitize_WithReplacementMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	customMessage := "Service temporarily unavailable"
-	middleware := errors.Sanitize(errors.WithReplacementMessage(customMessage))
+	middleware := sanitize.New(sanitize.WithReplacementMessage(customMessage))
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -177,10 +177,10 @@ func TestSanitize_WithMultipleOptions(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize(
-		errors.WithStackTraces(true),
-		errors.WithFilePaths(true),
-		errors.WithReplacementMessage("Custom error message"),
+	middleware := sanitize.New(
+		sanitize.WithStackTraces(true),
+		sanitize.WithFilePaths(true),
+		sanitize.WithReplacementMessage("Custom error message"),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -201,7 +201,7 @@ func TestSanitize_EmptyErrorBody(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
@@ -223,7 +223,7 @@ func TestSanitize_OnlyFilePathInBody(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -244,7 +244,7 @@ func TestSanitize_WindowsFilePath(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
@@ -266,7 +266,7 @@ func TestSanitize_3xxRedirect(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := errors.Sanitize()
+	middleware := sanitize.New()
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMovedPermanently {

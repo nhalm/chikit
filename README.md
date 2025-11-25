@@ -225,16 +225,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 Strip sensitive information from error responses to prevent information leakage:
 
 ```go
-import "github.com/nhalm/chikit/errors"
+import "github.com/nhalm/chikit/sanitize"
 
 // Default: strips stack traces and file paths from 4xx/5xx responses
-r.Use(errors.Sanitize())
+r.Use(sanitize.New())
 
 // Custom configuration
-r.Use(errors.Sanitize(
-    errors.WithStackTraces(true),  // Strip stack traces (default: true)
-    errors.WithFilePaths(true),    // Strip file paths (default: true)
-    errors.WithReplacementMessage("An error occurred"),
+r.Use(sanitize.New(
+    sanitize.WithStackTraces(true),  // Strip stack traces (default: true)
+    sanitize.WithFilePaths(true),    // Strip file paths (default: true)
+    sanitize.WithReplacementMessage("An error occurred"),
 ))
 ```
 
@@ -441,10 +441,10 @@ import (
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
     "github.com/nhalm/chikit/auth"
-    "github.com/nhalm/chikit/errors"
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
+    "github.com/nhalm/chikit/sanitize"
     "github.com/nhalm/chikit/slo"
     "github.com/nhalm/chikit/validate"
 )
@@ -459,7 +459,7 @@ func main() {
     r.Use(middleware.Recoverer)
 
     // Sanitize errors to prevent information leakage
-    r.Use(errors.Sanitize())
+    r.Use(sanitize.New())
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))

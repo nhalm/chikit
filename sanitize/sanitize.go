@@ -1,4 +1,4 @@
-// Package errors provides middleware for sanitizing error responses.
+// Package sanitize provides middleware for sanitizing error responses.
 //
 // SECURITY: This middleware prevents leaking sensitive internal information in error
 // responses by removing stack traces, file paths, and other implementation details.
@@ -11,20 +11,20 @@
 //
 // Basic usage (strips stack traces and file paths):
 //
-//	r.Use(errors.Sanitize())
+//	r.Use(sanitize.New())
 //
 // Custom configuration:
 //
-//	r.Use(errors.Sanitize(
-//		errors.WithStackTraces(true),  // Strip stack traces
-//		errors.WithFilePaths(true),     // Strip file paths
-//		errors.WithReplacementMessage("An error occurred"),
+//	r.Use(sanitize.New(
+//		sanitize.WithStackTraces(true),  // Strip stack traces
+//		sanitize.WithFilePaths(true),     // Strip file paths
+//		sanitize.WithReplacementMessage("An error occurred"),
 //	))
 //
 // Example transformations:
 //   - Before: "panic: runtime error at /app/internal/handler.go:42"
 //   - After:  "Internal Server Error"
-package errors
+package sanitize
 
 import (
 	"bufio"
@@ -43,8 +43,8 @@ var (
 	filePathPattern = regexp.MustCompile(`(/[a-zA-Z0-9_\-./]+\.go:\d+)|([A-Z]:\\[a-zA-Z0-9_\-\\./]+\.go:\d+)`)
 )
 
-// SanitizeConfig configures the Sanitize middleware.
-type SanitizeConfig struct {
+// Config configures the sanitization middleware.
+type Config struct {
 	// StripStackTraces removes stack trace lines from error responses (default: true)
 	StripStackTraces bool
 
@@ -57,7 +57,7 @@ type SanitizeConfig struct {
 
 type sanitizeWriter struct {
 	http.ResponseWriter
-	config       SanitizeConfig
+	config       Config
 	buf          *bytes.Buffer
 	statusCode   int
 	wroteHeader  bool
@@ -119,7 +119,7 @@ func (sw *sanitizeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return sw.ResponseWriter.(http.Hijacker).Hijack()
 }
 
-// Sanitize returns middleware that sanitizes error responses by removing sensitive information.
+// New returns middleware that sanitizes error responses by removing sensitive information.
 // Only error responses (4xx/5xx status codes) are processed; success responses pass through
 // unchanged for performance. The middleware buffers error responses to apply sanitization
 // before sending to the client.
@@ -135,16 +135,16 @@ func (sw *sanitizeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 //
 // Example:
 //
-//	r.Use(errors.Sanitize())
+//	r.Use(sanitize.New())
 //
 // With custom settings:
 //
-//	r.Use(errors.Sanitize(
-//		errors.WithStackTraces(false),  // Keep stack traces (dev only!)
-//		errors.WithReplacementMessage("Service unavailable"),
+//	r.Use(sanitize.New(
+//		sanitize.WithStackTraces(false),  // Keep stack traces (dev only!)
+//		sanitize.WithReplacementMessage("Service unavailable"),
 //	))
-func Sanitize(opts ...SanitizeOption) func(http.Handler) http.Handler {
-	config := SanitizeConfig{
+func New(opts ...Option) func(http.Handler) http.Handler {
+	config := Config{
 		StripStackTraces: true,
 		StripFilePaths:   true,
 		ReplacementMsg:   "Internal Server Error",
@@ -169,14 +169,14 @@ func Sanitize(opts ...SanitizeOption) func(http.Handler) http.Handler {
 	}
 }
 
-// SanitizeOption configures the Sanitize middleware.
-type SanitizeOption func(*SanitizeConfig)
+// Option configures the sanitization middleware.
+type Option func(*Config)
 
 // WithStackTraces controls whether stack traces are stripped (default: true).
 // Set to false only in development environments where debugging information is needed.
 // NEVER disable in production.
-func WithStackTraces(strip bool) SanitizeOption {
-	return func(c *SanitizeConfig) {
+func WithStackTraces(strip bool) Option {
+	return func(c *Config) {
 		c.StripStackTraces = strip
 	}
 }
@@ -184,8 +184,8 @@ func WithStackTraces(strip bool) SanitizeOption {
 // WithFilePaths controls whether file paths are stripped (default: true).
 // Set to false only in development environments where debugging information is needed.
 // NEVER disable in production.
-func WithFilePaths(strip bool) SanitizeOption {
-	return func(c *SanitizeConfig) {
+func WithFilePaths(strip bool) Option {
+	return func(c *Config) {
 		c.StripFilePaths = strip
 	}
 }
@@ -193,8 +193,8 @@ func WithFilePaths(strip bool) SanitizeOption {
 // WithReplacementMessage sets the message to use when all content is stripped.
 // This message is shown when sanitization removes all error content, providing
 // a safe, generic error message to clients. Default: "Internal Server Error".
-func WithReplacementMessage(msg string) SanitizeOption {
-	return func(c *SanitizeConfig) {
+func WithReplacementMessage(msg string) Option {
+	return func(c *Config) {
 		c.ReplacementMsg = msg
 	}
 }

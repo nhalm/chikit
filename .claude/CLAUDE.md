@@ -35,7 +35,7 @@ chikit/
 │       └── redis.go     # Redis (production)
 ├── headers/             # Header extraction/validation
 ├── slo/                 # SLO tracking (future)
-└── errors/              # Error sanitization (future)
+└── sanitize/            # Error sanitization
 ```
 
 ## Code Standards
@@ -73,7 +73,7 @@ builder.WithIP().WithHeader("X-Tenant-ID").Limit(100, time.Minute)
 
 ### Adding New Middleware
 
-1. Create package under root (e.g., `errors/`, `auth/`)
+1. Create package under root (e.g., `sanitize/`, `auth/`)
 2. Follow the two-tier API pattern:
    - Simple functions for common cases
    - Builder for complex cases
@@ -136,7 +136,7 @@ Don't add:
 ## Future Features (Roadmap)
 
 ### Phase 2: Security & Error Handling
-- `errors.Sanitize()` - Strip stack traces, internal paths from error responses
+- `sanitize.New()` - Strip stack traces, internal paths from error responses
 - `validate.QueryParams()` - Query parameter validation with inline rules
 - `validate.Headers()` - Header validation with allow/deny lists
 - `validate.MaxBodySize()` - Request size limits
