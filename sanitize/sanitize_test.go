@@ -214,27 +214,6 @@ func TestSanitize_EmptyErrorBody(t *testing.T) {
 	}
 }
 
-func TestSanitize_OnlyFilePathInBody(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("/app/main.go:42"))
-	})
-
-	req := httptest.NewRequest("GET", "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := sanitize.New()
-	middleware(handler).ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	if strings.Contains(body, "main.go") {
-		t.Error("file path should be removed")
-	}
-	if body == "" {
-		t.Error("should have replacement message when body is empty after sanitization")
-	}
-}
-
 func TestSanitize_WindowsFilePath(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

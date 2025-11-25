@@ -115,8 +115,8 @@ func WithBodySizeMessage(msg string) MaxBodySizeOption {
 	}
 }
 
-// QueryParamRule defines validation rules for a query parameter.
-type QueryParamRule struct {
+// QueryParamConfig defines validation rules for a query parameter.
+type QueryParamConfig struct {
 	// Name is the query parameter name to validate
 	Name string
 
@@ -148,7 +148,7 @@ type QueryParamRule struct {
 //		validate.Param("limit", validate.WithDefault("10"), validate.WithValidator(validate.MinLength(1))),
 //		validate.Param("sort", validate.WithValidator(validate.OneOf("asc", "desc"))),
 //	))
-func QueryParams(rules ...QueryParamRule) func(http.Handler) http.Handler {
+func QueryParams(rules ...QueryParamConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			query := r.URL.Query()
@@ -182,39 +182,39 @@ func QueryParams(rules ...QueryParamRule) func(http.Handler) http.Handler {
 }
 
 // WithRequired marks a query parameter as required.
-func WithRequired() func(*QueryParamRule) {
-	return func(r *QueryParamRule) {
+func WithRequired() func(*QueryParamConfig) {
+	return func(r *QueryParamConfig) {
 		r.Required = true
 	}
 }
 
 // WithDefault sets a default value for a query parameter.
 // The default is only applied when the parameter is missing and Required is false.
-func WithDefault(val string) func(*QueryParamRule) {
-	return func(r *QueryParamRule) {
+func WithDefault(val string) func(*QueryParamConfig) {
+	return func(r *QueryParamConfig) {
 		r.Default = val
 	}
 }
 
 // WithValidator sets a validation function for a query parameter.
 // The validator receives the parameter value and should return an error if invalid.
-func WithValidator(fn func(string) error) func(*QueryParamRule) {
-	return func(r *QueryParamRule) {
+func WithValidator(fn func(string) error) func(*QueryParamConfig) {
+	return func(r *QueryParamConfig) {
 		r.Validator = fn
 	}
 }
 
 // Param creates a query parameter rule with the given name and options.
-func Param(name string, opts ...func(*QueryParamRule)) QueryParamRule {
-	rule := QueryParamRule{Name: name}
+func Param(name string, opts ...func(*QueryParamConfig)) QueryParamConfig {
+	rule := QueryParamConfig{Name: name}
 	for _, opt := range opts {
 		opt(&rule)
 	}
 	return rule
 }
 
-// HeaderRule defines validation rules for a header.
-type HeaderRule struct {
+// HeaderConfig defines validation rules for a header.
+type HeaderConfig struct {
 	// Name is the HTTP header name to validate
 	Name string
 
@@ -245,7 +245,7 @@ type HeaderRule struct {
 //		validate.Header("X-Custom-Header",
 //			validate.WithDenyList("forbidden-value")),
 //	))
-func Headers(rules ...HeaderRule) func(http.Handler) http.Handler {
+func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			for _, rule := range rules {
@@ -302,8 +302,8 @@ func Headers(rules ...HeaderRule) func(http.Handler) http.Handler {
 }
 
 // Header creates a header validation rule with the given name and options.
-func Header(name string, opts ...func(*HeaderRule)) HeaderRule {
-	rule := HeaderRule{Name: name}
+func Header(name string, opts ...func(*HeaderConfig)) HeaderConfig {
+	rule := HeaderConfig{Name: name}
 	for _, opt := range opts {
 		opt(&rule)
 	}
@@ -311,32 +311,32 @@ func Header(name string, opts ...func(*HeaderRule)) HeaderRule {
 }
 
 // WithRequiredHeader marks a header as required.
-func WithRequiredHeader() func(*HeaderRule) {
-	return func(r *HeaderRule) {
+func WithRequiredHeader() func(*HeaderConfig) {
+	return func(r *HeaderConfig) {
 		r.Required = true
 	}
 }
 
 // WithAllowList sets the list of allowed values for a header.
 // If set, only values in this list are permitted. Returns 403 if the value is not in the list.
-func WithAllowList(values ...string) func(*HeaderRule) {
-	return func(r *HeaderRule) {
+func WithAllowList(values ...string) func(*HeaderConfig) {
+	return func(r *HeaderConfig) {
 		r.AllowedList = values
 	}
 }
 
 // WithDenyList sets the list of denied values for a header.
 // If set, values in this list are explicitly forbidden. Returns 403 if the value is in the list.
-func WithDenyList(values ...string) func(*HeaderRule) {
-	return func(r *HeaderRule) {
+func WithDenyList(values ...string) func(*HeaderConfig) {
+	return func(r *HeaderConfig) {
 		r.DeniedList = values
 	}
 }
 
-// CaseSensitive makes header value comparisons case-sensitive.
+// WithCaseSensitive makes header value comparisons case-sensitive.
 // By default, comparisons are case-insensitive.
-func CaseSensitive() func(*HeaderRule) {
-	return func(r *HeaderRule) {
+func WithCaseSensitive() func(*HeaderConfig) {
+	return func(r *HeaderConfig) {
 		r.CaseSensitive = true
 	}
 }

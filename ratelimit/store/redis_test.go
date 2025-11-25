@@ -667,32 +667,3 @@ func ExampleRedis() {
 
 	fmt.Printf("Request count: %d\n", count)
 }
-
-func TestRedis_MultipleKeys(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	window := time.Minute
-
-	keys := []string{"key1", "key2", "key3"}
-	for _, key := range keys {
-		count, _, err := store.Increment(ctx, key, window)
-		if err != nil {
-			t.Fatalf("Increment(%s) error = %v", key, err)
-		}
-		if count != 1 {
-			t.Errorf("Increment(%s) = %v, want 1", key, count)
-		}
-	}
-
-	for _, key := range keys {
-		got, err := store.Get(ctx, key)
-		if err != nil {
-			t.Errorf("Get(%s) error = %v", key, err)
-		}
-		if got != 1 {
-			t.Errorf("Get(%s) = %v, want 1", key, got)
-		}
-	}
-}

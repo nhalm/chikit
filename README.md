@@ -15,8 +15,8 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
 - **Error Sanitization**: Strip sensitive information from error responses
 - **Authentication**: API key and bearer token validation with custom validators
-- **SLO Tracking**: Latency percentiles, error rates, and availability monitoring
-- **Zero Config Files**: Pure code configuration, environment variable support
+- **SLO Tracking**: Callback-based metrics for latency, traffic, and errors
+- **Zero Config Files**: Pure code configuration - no config files or environment variables
 - **Distributed-Ready**: Redis backend for Kubernetes deployments
 - **Fluent API**: Chainable, readable middleware configuration
 
@@ -168,7 +168,7 @@ r.Use(headers.New("X-API-Key", "api_key"))
 
 // With validation
 r.Use(headers.New("X-Correlation-ID", "correlation_id",
-    headers.Required(),
+    headers.WithRequired(),
     headers.WithValidator(func(val string) (any, error) {
         if len(val) < 10 {
             return nil, errors.New("correlation ID too short")
@@ -202,7 +202,7 @@ import (
 
 // Extract X-Tenant-ID header as UUID with validation
 r.Use(headers.New("X-Tenant-ID", "tenant_id",
-    headers.Required(),
+    headers.WithRequired(),
     headers.WithValidator(func(val string) (any, error) {
         return uuid.Parse(val)
     }),
@@ -271,7 +271,7 @@ Validate query parameters with inline rules:
 // Single parameter with validation
 r.Use(validate.QueryParams(
     validate.Param("limit",
-        validate.Required(),
+        validate.WithRequired(),
         validate.WithDefault("10"),
         validate.WithValidator(validate.OneOf("10", "25", "50", "100")),
     ),
@@ -308,7 +308,7 @@ Validate headers with allow/deny lists:
 ```go
 // Required header
 r.Use(validate.Headers(
-    validate.Header("X-API-Key", validate.RequiredHeader()),
+    validate.Header("X-API-Key", validate.WithRequiredHeader()),
 ))
 
 // Allow list (only specific values allowed)
@@ -329,13 +329,13 @@ r.Use(validate.Headers(
 r.Use(validate.Headers(
     validate.Header("X-Auth-Token",
         validate.WithAllowList("Bearer", "Basic"),
-        validate.CaseSensitive(),
+        validate.WithCaseSensitive(),
     ),
 ))
 
 // Multiple header rules
 r.Use(validate.Headers(
-    validate.Header("X-API-Key", validate.RequiredHeader()),
+    validate.Header("X-API-Key", validate.WithRequiredHeader()),
     validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
     validate.Header("X-Source", validate.WithDenyList("blocked")),
 ))
@@ -361,7 +361,7 @@ r.Use(auth.APIKey(validator))
 r.Use(auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-Key")))
 
 // Optional API key
-r.Use(auth.APIKey(validator, auth.OptionalAPIKey()))
+r.Use(auth.APIKey(validator, auth.WithOptionalAPIKey()))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +386,7 @@ validator := func(token string) bool {
 r.Use(auth.BearerToken(validator))
 
 // Optional bearer token
-r.Use(auth.BearerToken(validator, auth.OptionalBearerToken()))
+r.Use(auth.BearerToken(validator, auth.WithOptionalBearerToken()))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -399,32 +399,185 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 ## SLO Tracking
 
-Track service level objectives with latency percentiles and error rates:
+Track service level objectives with callback-based metrics. The middleware captures request metrics and calls your callback function, allowing integration with any observability system without forcing specific client libraries.
+
+### Basic Usage
 
 ```go
-import "github.com/nhalm/chikit/slo"
+import (
+    "context"
+    "github.com/nhalm/chikit/slo"
+)
 
-// Create metrics tracker
-metrics := slo.NewMetrics(1000) // Keep last 1000 latencies
+// Define callback to handle metrics
+onMetric := func(ctx context.Context, m slo.Metric) {
+    // m.Method: HTTP method (GET, POST, etc.)
+    // m.Route: Chi route pattern ("/api/users/{id}")
+    // m.StatusCode: HTTP status code
+    // m.Duration: Request processing time
 
-// Track all requests
-r.Use(slo.Track(metrics))
-
-// Export metrics periodically
-exporter := func(stats slo.Stats) {
-    log.Printf("Availability: %.2f%%", stats.Availability*100)
-    log.Printf("Error rate: %.2f%%", stats.ErrorRate*100)
-    log.Printf("P50: %v, P95: %v, P99: %v",
-        stats.Latency.P50, stats.Latency.P95, stats.Latency.P99)
+    log.Printf("method=%s route=%s status=%d duration=%v",
+        m.Method, m.Route, m.StatusCode, m.Duration)
 }
 
-r.Use(slo.Track(metrics, slo.WithExporter(exporter, 60*time.Second)))
+r.Use(slo.Track(onMetric))
+```
 
-// Get current stats
-stats := metrics.Stats()
-fmt.Printf("Total requests: %d\n", stats.TotalRequests)
-fmt.Printf("Error requests: %d\n", stats.ErrorRequests)
-fmt.Printf("P99 latency: %v\n", stats.Latency.P99)
+### Prometheus Integration
+
+Example showing how to adapt the callback for Prometheus (prometheus/client_golang is not a dependency):
+
+```go
+import (
+    "context"
+    "strconv"
+
+    "github.com/nhalm/chikit/slo"
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+    httpDuration = promauto.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name: "http_request_duration_seconds",
+            Help: "HTTP request latency in seconds",
+            Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+        },
+        []string{"method", "route", "status"},
+    )
+
+    httpRequestsTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "http_requests_total",
+            Help: "Total number of HTTP requests",
+        },
+        []string{"method", "route", "status"},
+    )
+)
+
+func prometheusCallback(ctx context.Context, m slo.Metric) {
+    labels := prometheus.Labels{
+        "method": m.Method,
+        "route":  m.Route,
+        "status": strconv.Itoa(m.StatusCode),
+    }
+
+    httpDuration.With(labels).Observe(m.Duration.Seconds())
+    httpRequestsTotal.With(labels).Inc()
+}
+
+r.Use(slo.Track(prometheusCallback))
+```
+
+### Datadog Integration
+
+Example showing how to adapt the callback for Datadog (DataDog/datadog-go is not a dependency):
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/DataDog/datadog-go/v5/statsd"
+    "github.com/nhalm/chikit/slo"
+)
+
+func datadogCallback(client *statsd.Client) func(context.Context, slo.Metric) {
+    return func(ctx context.Context, m slo.Metric) {
+        tags := []string{
+            fmt.Sprintf("method:%s", m.Method),
+            fmt.Sprintf("route:%s", m.Route),
+            fmt.Sprintf("status:%d", m.StatusCode),
+        }
+
+        // Send timing metric
+        client.Timing("http.request.duration", m.Duration, tags, 1.0)
+
+        // Increment request counter
+        client.Incr("http.request.count", tags, 1.0)
+
+        // Track errors
+        if m.StatusCode >= 500 {
+            client.Incr("http.request.errors", tags, 1.0)
+        }
+    }
+}
+
+// Usage
+ddClient, _ := statsd.New("127.0.0.1:8125")
+r.Use(slo.Track(datadogCallback(ddClient)))
+```
+
+### OpenTelemetry Integration
+
+Example showing how to adapt the callback for OpenTelemetry:
+
+```go
+import (
+    "context"
+    "strconv"
+
+    "github.com/nhalm/chikit/slo"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/metric"
+)
+
+func otelCallback(meter metric.Meter) func(context.Context, slo.Metric) {
+    histogram, _ := meter.Float64Histogram(
+        "http.server.request.duration",
+        metric.WithUnit("s"),
+        metric.WithDescription("HTTP request duration"),
+    )
+
+    counter, _ := meter.Int64Counter(
+        "http.server.request.count",
+        metric.WithDescription("Total HTTP requests"),
+    )
+
+    return func(ctx context.Context, m slo.Metric) {
+        attrs := []attribute.KeyValue{
+            attribute.String("http.method", m.Method),
+            attribute.String("http.route", m.Route),
+            attribute.Int("http.status_code", m.StatusCode),
+        }
+
+        histogram.Record(ctx, m.Duration.Seconds(), metric.WithAttributes(attrs...))
+        counter.Add(ctx, 1, metric.WithAttributes(attrs...))
+    }
+}
+
+// Usage
+meter := otel.Meter("chikit")
+r.Use(slo.Track(otelCallback(meter)))
+```
+
+### Per-Route Tracking
+
+Track metrics for specific routes only:
+
+```go
+r.Route("/api/v1", func(r chi.Router) {
+    r.Use(slo.Track(onMetric))  // Track only /api/v1 routes
+    r.Get("/users", listUsers)
+    r.Post("/users", createUser)
+})
+```
+
+### Panic Handling
+
+The middleware automatically handles panics, recording them as 500 errors before re-raising:
+
+```go
+onMetric := func(ctx context.Context, m slo.Metric) {
+    if m.StatusCode >= 500 {
+        // Log or alert on server errors
+        log.Printf("ERROR: %s %s returned %d", m.Method, m.Route, m.StatusCode)
+    }
+}
+
+r.Use(slo.Track(onMetric))
 ```
 
 ## Complete Example
@@ -433,8 +586,10 @@ fmt.Printf("P99 latency: %v\n", stats.Latency.P99)
 package main
 
 import (
+    "context"
     "log"
     "net/http"
+    "strconv"
     "time"
 
     "github.com/go-chi/chi/v5"
@@ -464,9 +619,11 @@ func main() {
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
 
-    // SLO tracking
-    metrics := slo.NewMetrics(1000)
-    r.Use(slo.Track(metrics))
+    // SLO tracking with callback
+    r.Use(slo.Track(func(ctx context.Context, m slo.Metric) {
+        log.Printf("method=%s route=%s status=%d duration=%v",
+            m.Method, m.Route, m.StatusCode, m.Duration)
+    }))
 
     // Validate environment header
     r.Use(validate.Headers(
@@ -477,6 +634,7 @@ func main() {
 
     // Extract tenant ID from header
     r.Use(headers.New("X-Tenant-ID", "tenant_id",
+        headers.WithRequired(),
         headers.WithValidator(func(val string) (any, error) {
             return uuid.Parse(val)
         }),
@@ -501,7 +659,7 @@ func main() {
     r.Route("/api/v1", func(r chi.Router) {
         // API key authentication
         r.Use(auth.APIKey(func(key string) bool {
-            return validateAPIKey(key) // Your validation logic
+            return validateAPIKey(key)
         }))
 
         // Per-tenant rate limiting: 100 requests per minute
@@ -529,14 +687,22 @@ func validateAPIKey(key string) bool {
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
-    val, _ := headers.FromContext(r.Context(), "tenant_id")
+    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    if !ok {
+        http.Error(w, "No tenant ID", http.StatusBadRequest)
+        return
+    }
     tenantID := val.(uuid.UUID)
     // Query users for tenant...
     w.Write([]byte("Users for tenant: " + tenantID.String()))
 }
 
 func createUser(w http.ResponseWriter, r *http.Request) {
-    val, _ := headers.FromContext(r.Context(), "tenant_id")
+    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    if !ok {
+        http.Error(w, "No tenant ID", http.StatusBadRequest)
+        return
+    }
     tenantID := val.(uuid.UUID)
     // Create user for tenant...
     w.WriteHeader(http.StatusCreated)

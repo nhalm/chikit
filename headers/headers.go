@@ -6,7 +6,7 @@
 //
 // Basic extraction:
 //
-//	middleware := headers.New("X-API-Key", "api_key", headers.Required())
+//	middleware := headers.New("X-API-Key", "api_key", headers.WithRequired())
 //	r.Use(middleware)
 //
 // With transformation and validation:
@@ -19,7 +19,7 @@
 //		return id, nil
 //	}
 //	middleware := headers.New("X-Tenant-ID", "tenant_id",
-//		headers.Required(),
+//		headers.WithRequired(),
 //		headers.WithValidator(validator))
 //
 // Retrieve from context:
@@ -49,9 +49,9 @@ type HeaderToContext struct {
 // Option configures a HeaderToContext middleware.
 type Option func(*HeaderToContext)
 
-// Required marks the header as required.
+// WithRequired marks the header as required.
 // Returns 400 (Bad Request) if the header is missing and no default is provided.
-func Required() Option {
+func WithRequired() Option {
 	return func(h *HeaderToContext) {
 		h.required = true
 	}
@@ -94,7 +94,7 @@ func WithValidator(fn func(string) (any, error)) Option {
 // Parameters:
 //   - header: The HTTP header name to extract (e.g., "X-API-Key")
 //   - ctxKey: The context key to store the value under (e.g., "api_key")
-//   - opts: Optional configuration (Required, WithDefault, WithValidator)
+//   - opts: Optional configuration (WithRequired, WithDefault, WithValidator)
 //
 // Returns 400 (Bad Request) if:
 //   - A required header is missing and no default is provided
@@ -107,7 +107,7 @@ func WithValidator(fn func(string) (any, error)) Option {
 //
 //	// Required with validation
 //	r.Use(headers.New("X-Tenant-ID", "tenant_id",
-//		headers.Required(),
+//		headers.WithRequired(),
 //		headers.WithValidator(validateUUID)))
 //
 //	// Optional with default

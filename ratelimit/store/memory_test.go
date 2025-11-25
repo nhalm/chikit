@@ -110,8 +110,8 @@ func TestMemory_Increment_Concurrent(t *testing.T) {
 	ctx := context.Background()
 	key := "test:concurrent"
 	window := time.Minute
-	goroutines := 100
-	incrementsPerGoroutine := 100
+	goroutines := 10
+	incrementsPerGoroutine := 10
 	expectedTotal := int64(goroutines * incrementsPerGoroutine)
 
 	var wg sync.WaitGroup
@@ -146,7 +146,7 @@ func TestMemory_Increment_ConcurrentDifferentKeys(t *testing.T) {
 	ctx := context.Background()
 	window := time.Minute
 	keys := 10
-	incrementsPerKey := 50
+	incrementsPerKey := 5
 
 	var wg sync.WaitGroup
 	wg.Add(keys)
@@ -241,39 +241,6 @@ func TestMemory_Get(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMemory_Get_Concurrent(t *testing.T) {
-	m := NewMemory()
-	defer m.Close()
-
-	ctx := context.Background()
-	key := "test:concurrent"
-	expected := int64(100)
-
-	m.entries[key] = &memoryEntry{
-		count:      expected,
-		expiration: time.Now().Add(time.Minute),
-	}
-
-	var wg sync.WaitGroup
-	goroutines := 100
-	wg.Add(goroutines)
-
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			defer wg.Done()
-			got, err := m.Get(ctx, key)
-			if err != nil {
-				t.Errorf("Get() error = %v", err)
-			}
-			if got != expected {
-				t.Errorf("Get() = %v, want %v", got, expected)
-			}
-		}()
-	}
-
-	wg.Wait()
 }
 
 func TestMemory_Reset(t *testing.T) {

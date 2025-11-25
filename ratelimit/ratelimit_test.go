@@ -1,6 +1,8 @@
 package ratelimit_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,59 +15,88 @@ import (
 	"github.com/nhalm/chikit/ratelimit/store"
 )
 
-func TestByIP(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := ratelimit.ByIP(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	req.RemoteAddr = "192.168.1.1:1234"
-
-	for i := 0; i < 2; i++ {
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
+func TestSimpleAPI(t *testing.T) {
+	tests := []struct {
+		name         string
+		middleware   func(http.Handler) http.Handler
+		setupRequest func(*http.Request)
+		limit        int
+	}{
+		{
+			name: "ByIP",
+			middleware: func(h http.Handler) http.Handler {
+				st := store.NewMemory()
+				t.Cleanup(func() { st.Close() })
+				return ratelimit.ByIP(st, 2, time.Minute)(h)
+			},
+			setupRequest: func(r *http.Request) {
+				r.RemoteAddr = "192.168.1.1:1234"
+			},
+			limit: 2,
+		},
+		{
+			name: "ByHeader",
+			middleware: func(h http.Handler) http.Handler {
+				st := store.NewMemory()
+				t.Cleanup(func() { st.Close() })
+				return ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(h)
+			},
+			setupRequest: func(r *http.Request) {
+				r.Header.Set("X-API-Key", "test-key")
+			},
+			limit: 3,
+		},
+		{
+			name: "ByEndpoint",
+			middleware: func(h http.Handler) http.Handler {
+				st := store.NewMemory()
+				t.Cleanup(func() { st.Close() })
+				return ratelimit.ByEndpoint(st, 2, time.Minute)(h)
+			},
+			setupRequest: func(_ *http.Request) {},
+			limit:        2,
+		},
+		{
+			name: "ByQueryParam",
+			middleware: func(h http.Handler) http.Handler {
+				st := store.NewMemory()
+				t.Cleanup(func() { st.Close() })
+				return ratelimit.ByQueryParam(st, "api_key", 3, time.Minute)(h)
+			},
+			setupRequest: func(r *http.Request) {
+				r.URL.RawQuery = "api_key=test-key-123"
+			},
+			limit: 3,
+		},
 	}
 
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := tt.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
 
-	if retry := rr.Header().Get("Retry-After"); retry == "" {
-		t.Error("expected Retry-After header")
-	}
-}
+			req := httptest.NewRequest("GET", "/test", http.NoBody)
+			tt.setupRequest(req)
 
-func TestByHeader(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
+			for i := 0; i < tt.limit; i++ {
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, req)
+				if rr.Code != http.StatusOK {
+					t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
+				}
+			}
 
-	handler := ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusTooManyRequests {
+				t.Errorf("expected 429, got %d", rr.Code)
+			}
 
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	req.Header.Set("X-API-Key", "test-key")
-
-	for i := 0; i < 3; i++ {
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
-	}
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
+			if retry := rr.Header().Get("Retry-After"); retry == "" {
+				t.Error("expected Retry-After header")
+			}
+		})
 	}
 }
 
@@ -83,56 +114,6 @@ func TestByHeaderMissing(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected request without header to pass, got %d", rr.Code)
-	}
-}
-
-func TestByEndpoint(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := ratelimit.ByEndpoint(st, 2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("POST", "/api/v1/users", http.NoBody)
-
-	for i := 0; i < 2; i++ {
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
-	}
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
-	}
-}
-
-func TestByQueryParam(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := ratelimit.ByQueryParam(st, "api_key", 3, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test?api_key=test-key-123", http.NoBody)
-
-	for i := 0; i < 3; i++ {
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
-	}
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
 	}
 }
 
@@ -472,5 +453,46 @@ func TestConcurrentSameKey(t *testing.T) {
 
 	if allowedCount+deniedCount != concurrency {
 		t.Errorf("total requests should be %d, got %d", concurrency, allowedCount+deniedCount)
+	}
+}
+
+type errorStore struct{}
+
+func (e *errorStore) Increment(_ context.Context, _ string, _ time.Duration) (int64, time.Duration, error) {
+	return 0, 0, errors.New("storage backend unavailable")
+}
+
+func (e *errorStore) Get(_ context.Context, _ string) (int64, error) {
+	return 0, errors.New("storage backend unavailable")
+}
+
+func (e *errorStore) Reset(_ context.Context, _ string) error {
+	return errors.New("storage backend unavailable")
+}
+
+func (e *errorStore) Close() error {
+	return nil
+}
+
+func TestRateLimit_StoreError(t *testing.T) {
+	st := &errorStore{}
+
+	handler := ratelimit.ByIP(st, 10, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.1:1234"
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", rr.Code)
+	}
+
+	body := rr.Body.String()
+	if body != "Rate limit check failed\n" {
+		t.Errorf("expected error message 'Rate limit check failed', got %q", body)
 	}
 }

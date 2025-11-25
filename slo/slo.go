@@ -1,283 +1,138 @@
 // Package slo provides SLO (Service Level Objective) tracking middleware.
 //
-// The package tracks key SLO metrics including request count, error rate, availability,
-// and latency percentiles (p50, p95, p99). Metrics can be exported periodically to
-// monitoring systems like Prometheus, Datadog, or custom backends.
+// The package emits per-request metrics via callback, following the four golden signals
+// from the Google SRE handbook: Latency, Traffic, and Errors. The callback-based design
+// works correctly in horizontally scaled environments by delegating aggregation to your
+// observability stack (Prometheus, Datadog, OpenTelemetry, etc.).
 //
 // Basic usage:
 //
-//	metrics := slo.NewMetrics(1000)
-//	r.Use(slo.Track(metrics))
-//	stats := metrics.Stats() // Get current metrics
-//
-// With periodic export:
-//
-//	exporter := func(stats slo.Stats) {
-//		prometheus.RecordAvailability(stats.Availability)
-//		prometheus.RecordLatency(stats.Latency.P99)
+//	onMetric := func(ctx context.Context, m slo.Metric) {
+//		prometheus.ObserveLatency(m.Method, m.Route, m.StatusCode, m.Duration)
+//		prometheus.IncRequestCounter(m.Method, m.Route, m.StatusCode)
 //	}
-//	r.Use(slo.Track(metrics, slo.WithExporter(exporter, 60*time.Second)))
+//	r.Use(slo.Track(onMetric))
 //
-// The middleware considers responses with status >= 500 as errors when calculating
-// availability and error rate. All other status codes are considered successful.
+// Per-route tracking:
+//
+//	r.Route("/api/v1", func(r chi.Router) {
+//		r.Use(slo.Track(onMetric))
+//		r.Get("/users", listUsers)
+//	})
+//
+// The middleware captures structured metrics per request including route pattern from Chi,
+// HTTP method, status code, and request duration. Metrics are emitted after the request
+// completes, allowing you to implement custom aggregation, filtering, or export logic.
 package slo
 
 import (
 	"context"
 	"net/http"
-	"sort"
-	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
-// Metrics contains SLO tracking data with thread-safe access.
-// Maintains a bounded buffer of recent latencies to calculate percentiles.
-type Metrics struct {
-	mu sync.RWMutex
+// Metric contains structured data for a single request.
+// All fields are populated after the request completes.
+type Metric struct {
+	// Method is the HTTP method (GET, POST, etc.)
+	Method string
 
-	totalRequests int64
-	errorRequests int64
-	latencies     []time.Duration
-	maxLatencies  int
+	// Route is the Chi route pattern (e.g., "/api/users/{id}")
+	// Falls back to URL path if Chi route context is unavailable
+	Route string
+
+	// StatusCode is the HTTP status code returned to the client
+	StatusCode int
+
+	// Duration is the total request processing time
+	Duration time.Duration
 }
 
-// NewMetrics creates a new Metrics tracker with a bounded latency buffer.
-// The maxLatencies parameter determines how many recent latency samples to keep
-// for percentile calculations. Larger values provide more accurate percentiles
-// but use more memory. When the buffer is full, the oldest latency is discarded.
+// Track returns middleware that emits metrics for each request via callback.
+// The callback receives the request context and structured metric data after
+// the request completes. This design allows integration with any observability
+// system without forcing specific client libraries.
 //
-// A value of 1000 is suitable for most applications. Set to 0 to use the default of 1000.
-func NewMetrics(maxLatencies int) *Metrics {
-	if maxLatencies <= 0 {
-		maxLatencies = 1000
-	}
-	return &Metrics{
-		latencies:    make([]time.Duration, 0, maxLatencies),
-		maxLatencies: maxLatencies,
-	}
-}
-
-// Stats returns current SLO statistics as a snapshot.
-type Stats struct {
-	// TotalRequests is the total number of requests processed
-	TotalRequests int64
-
-	// ErrorRequests is the number of requests that resulted in errors (status >= 500)
-	ErrorRequests int64
-
-	// ErrorRate is the ratio of error requests to total requests (0.0 to 1.0)
-	ErrorRate float64
-
-	// Availability is the ratio of successful requests to total requests (0.0 to 1.0)
-	// Calculated as (total - errors) / total
-	Availability float64
-
-	// Latency contains percentile statistics for request duration
-	Latency LatencyStats
-}
-
-// LatencyStats contains latency percentile data.
-type LatencyStats struct {
-	// P50 is the median latency (50th percentile)
-	P50 time.Duration
-
-	// P95 is the 95th percentile latency
-	P95 time.Duration
-
-	// P99 is the 99th percentile latency
-	P99 time.Duration
-}
-
-// Stats returns a snapshot of current metrics.
-// This method is thread-safe and can be called concurrently with request processing.
-func (m *Metrics) Stats() Stats {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	total := float64(m.totalRequests)
-	errors := float64(m.errorRequests)
-
-	errorRate := 0.0
-	if total > 0 {
-		errorRate = errors / total
-	}
-
-	availability := 0.0
-	if total > 0 {
-		availability = (total - errors) / total
-	}
-
-	return Stats{
-		TotalRequests: m.totalRequests,
-		ErrorRequests: m.errorRequests,
-		ErrorRate:     errorRate,
-		Availability:  availability,
-		Latency:       m.calculateLatencyStats(),
-	}
-}
-
-func (m *Metrics) calculateLatencyStats() LatencyStats {
-	if len(m.latencies) == 0 {
-		return LatencyStats{}
-	}
-
-	sorted := make([]time.Duration, len(m.latencies))
-	copy(sorted, m.latencies)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i] < sorted[j]
-	})
-
-	return LatencyStats{
-		P50: percentile(sorted, 0.50),
-		P95: percentile(sorted, 0.95),
-		P99: percentile(sorted, 0.99),
-	}
-}
-
-func percentile(sorted []time.Duration, p float64) time.Duration {
-	if len(sorted) == 0 {
-		return 0
-	}
-	index := int(float64(len(sorted)) * p)
-	if index >= len(sorted) {
-		index = len(sorted) - 1
-	}
-	return sorted[index]
-}
-
-func (m *Metrics) record(latency time.Duration, isError bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.totalRequests++
-	if isError {
-		m.errorRequests++
-	}
-
-	if len(m.latencies) >= m.maxLatencies {
-		m.latencies = m.latencies[1:]
-	}
-	m.latencies = append(m.latencies, latency)
-}
-
-// Reset clears all metrics, setting counters to zero and clearing latency buffer.
-func (m *Metrics) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.totalRequests = 0
-	m.errorRequests = 0
-	m.latencies = m.latencies[:0]
-}
-
-// MetricsExporter is called periodically with current metrics.
-// Implement this to export metrics to your monitoring system (Prometheus, Datadog, etc.).
-type MetricsExporter func(Stats)
-
-// TrackConfig configures the Track middleware.
-type TrackConfig struct {
-	// Metrics is the metrics instance to record to
-	Metrics *Metrics
-
-	// Exporter is called periodically with current metrics (optional)
-	Exporter MetricsExporter
-
-	// Interval is how often to call the exporter (default: 60 seconds)
-	Interval time.Duration
-
-	// ctx controls the lifecycle of the exporter goroutine
-	ctx context.Context
-}
-
-// Track returns middleware that tracks SLO metrics for each request.
-// Records request latency and tracks errors (responses with status >= 500).
-// If an exporter is configured, it will be called periodically in a background goroutine.
+// The middleware captures:
+//   - Latency: Request duration from start to completion
+//   - Traffic: Request count (via callback invocation)
+//   - Errors: Status codes >= 500 indicate errors
 //
-// The exporter goroutine is started when the middleware is created and runs until
-// the context (set via WithContext) is canceled. If no context is provided, the
-// exporter runs indefinitely. The goroutine is cleaned up when the context is canceled,
-// so always use WithContext(ctx) in production to ensure proper shutdown.
+// Example with Prometheus:
 //
-// Example:
+//	var (
+//		requestDuration = prometheus.NewHistogramVec(
+//			prometheus.HistogramOpts{
+//				Name: "http_server_request_duration_seconds",
+//				Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+//			},
+//			[]string{"method", "route", "status_code"},
+//		)
+//		requestsTotal = prometheus.NewCounterVec(
+//			prometheus.CounterOpts{Name: "http_server_requests_total"},
+//			[]string{"method", "route", "status_code"},
+//		)
+//	)
 //
-//	metrics := slo.NewMetrics(1000)
-//	ctx, cancel := context.WithCancel(context.Background())
-//	defer cancel()
-//
-//	exporter := func(stats slo.Stats) {
-//		log.Printf("Availability: %.2f%%, P99: %v", stats.Availability*100, stats.Latency.P99)
+//	onMetric := func(ctx context.Context, m slo.Metric) {
+//		labels := prometheus.Labels{
+//			"method": m.Method,
+//			"route": m.Route,
+//			"status_code": strconv.Itoa(m.StatusCode),
+//		}
+//		requestDuration.With(labels).Observe(m.Duration.Seconds())
+//		requestsTotal.With(labels).Inc()
 //	}
-//
-//	r.Use(slo.Track(metrics,
-//		slo.WithExporter(exporter, 60*time.Second),
-//		slo.WithContext(ctx)))
-func Track(metrics *Metrics, opts ...TrackOption) func(http.Handler) http.Handler {
-	config := TrackConfig{
-		Metrics:  metrics,
-		Exporter: nil,
-		Interval: 60 * time.Second,
-		ctx:      context.Background(),
-	}
-
-	for _, opt := range opts {
-		opt(&config)
-	}
-
-	if config.Exporter != nil && config.Interval > 0 {
-		go func() {
-			ticker := time.NewTicker(config.Interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-config.ctx.Done():
-					return
-				case <-ticker.C:
-					config.Exporter(config.Metrics.Stats())
-				}
-			}
-		}()
-	}
-
+//	r.Use(slo.Track(onMetric))
+func Track(onMetric func(context.Context, Metric)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-
 			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+			defer func() {
+				if err := recover(); err != nil {
+					rw.statusCode = http.StatusInternalServerError
+
+					route := r.URL.Path
+					if rctx := chi.RouteContext(r.Context()); rctx != nil {
+						if pattern := rctx.RoutePattern(); pattern != "" {
+							route = pattern
+						}
+					}
+
+					metric := Metric{
+						Method:     r.Method,
+						Route:      route,
+						StatusCode: rw.statusCode,
+						Duration:   time.Since(start),
+					}
+
+					onMetric(r.Context(), metric)
+					panic(err)
+				}
+			}()
+
 			next.ServeHTTP(rw, r)
 
-			latency := time.Since(start)
-			isError := rw.statusCode >= 500
+			route := r.URL.Path
+			if rctx := chi.RouteContext(r.Context()); rctx != nil {
+				if pattern := rctx.RoutePattern(); pattern != "" {
+					route = pattern
+				}
+			}
 
-			config.Metrics.record(latency, isError)
+			metric := Metric{
+				Method:     r.Method,
+				Route:      route,
+				StatusCode: rw.statusCode,
+				Duration:   time.Since(start),
+			}
+
+			onMetric(r.Context(), metric)
 		})
-	}
-}
-
-// TrackOption configures Track middleware.
-type TrackOption func(*TrackConfig)
-
-// WithExporter sets a metrics exporter that is called periodically.
-// The exporter function receives the current stats and can export them to
-// monitoring systems, write to logs, or perform any other action.
-func WithExporter(exporter MetricsExporter, interval time.Duration) TrackOption {
-	return func(c *TrackConfig) {
-		c.Exporter = exporter
-		c.Interval = interval
-	}
-}
-
-// WithContext sets the context for the exporter goroutine lifecycle.
-// When the context is canceled, the exporter goroutine stops. Use this in production
-// to ensure proper cleanup during application shutdown.
-//
-// Example:
-//
-//	ctx, cancel := context.WithCancel(context.Background())
-//	defer cancel() // Stops the exporter on shutdown
-//	r.Use(slo.Track(metrics, slo.WithContext(ctx)))
-func WithContext(ctx context.Context) TrackOption {
-	return func(c *TrackConfig) {
-		c.ctx = ctx
 	}
 }
 

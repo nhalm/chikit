@@ -84,7 +84,7 @@ func TestRequiredHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := New("X-Required-Header", "required_key", Required())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handler := New("X-Required-Header", "required_key", WithRequired())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
@@ -302,14 +302,14 @@ func TestMultipleOptions(t *testing.T) {
 	}{
 		{
 			name:       "required with validator success",
-			opts:       []Option{Required(), WithValidator(validator)},
+			opts:       []Option{WithRequired(), WithValidator(validator)},
 			headerVal:  "valid",
 			wantStatus: http.StatusOK,
 			wantCtxVal: "transformed",
 		},
 		{
 			name:       "required with validator failure",
-			opts:       []Option{Required(), WithValidator(validator)},
+			opts:       []Option{WithRequired(), WithValidator(validator)},
 			headerVal:  "invalid",
 			wantStatus: http.StatusBadRequest,
 		},
@@ -386,4 +386,28 @@ func TestChainedMiddleware(t *testing.T) {
 	if !ok2 || val2 != "value2" {
 		t.Errorf("key2: got (%v, %v), want (value2, true)", val2, ok2)
 	}
+}
+
+func TestHeaders_ValidatorPanic(t *testing.T) {
+	panicValidator := func(_ string) (any, error) {
+		panic("validator panic")
+	}
+
+	handler := New("X-Panic", "panic_key", WithValidator(panicValidator))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.Header.Set("X-Panic", "test-value")
+	rr := httptest.NewRecorder()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic to propagate, but it did not")
+		} else if r != "validator panic" {
+			t.Errorf("expected panic message 'validator panic', got %v", r)
+		}
+	}()
+
+	handler.ServeHTTP(rr, req)
 }

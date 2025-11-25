@@ -147,6 +147,31 @@ func TestQueryParams_ValidatorFails(t *testing.T) {
 	}
 }
 
+func TestQueryParams_MultipleValues(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		values := r.URL.Query()["tags"]
+		if len(values) == 2 && values[0] == "a" && values[1] == "b" {
+			w.Write([]byte("ok"))
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+
+	req := httptest.NewRequest("GET", "/?tags=a&tags=b", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	middleware := validate.QueryParams()
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	if rec.Body.String() != "ok" {
+		t.Error("multiple query param values should be preserved")
+	}
+}
+
 func TestHeaders_Required(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
