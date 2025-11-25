@@ -123,13 +123,35 @@ r.Use(limiter.Handler)
 
 ### Rate Limit Headers
 
-All rate limiters automatically set standard headers:
+All rate limiters set standard headers following the IETF draft-ietf-httpapi-ratelimit-headers specification:
 
 ```
 RateLimit-Limit: 100
 RateLimit-Remaining: 95
 RateLimit-Reset: 1735401600
 Retry-After: 60
+```
+
+Header behavior can be configured using the Builder API:
+
+```go
+// Always include headers (default)
+r.Use(ratelimit.NewBuilder(st).
+    WithIP().
+    WithHeaderMode(ratelimit.HeadersAlways).
+    Limit(100, time.Minute))
+
+// Include headers only on 429 responses
+r.Use(ratelimit.NewBuilder(st).
+    WithIP().
+    WithHeaderMode(ratelimit.HeadersOnLimitExceeded).
+    Limit(100, time.Minute))
+
+// Never include headers
+r.Use(ratelimit.NewBuilder(st).
+    WithIP().
+    WithHeaderMode(ratelimit.HeadersNever).
+    Limit(100, time.Minute))
 ```
 
 ## Header Management

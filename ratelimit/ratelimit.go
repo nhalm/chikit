@@ -35,16 +35,36 @@ import (
 	"github.com/nhalm/chikit/ratelimit/store"
 )
 
+// HeaderMode controls when rate limit headers are included in responses.
+// This configuration is only available through the Builder API.
+type HeaderMode int
+
+const (
+	// HeadersAlways includes rate limit headers on all responses (default).
+	// Headers: RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset
+	// On 429: Also includes Retry-After
+	HeadersAlways HeaderMode = iota
+
+	// HeadersOnLimitExceeded includes rate limit headers only on 429 responses.
+	// Headers on 429: RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After
+	HeadersOnLimitExceeded
+
+	// HeadersNever never includes rate limit headers in any response.
+	// Use this when you want rate limiting without exposing limits to clients.
+	HeadersNever
+)
+
 // KeyFunc extracts a rate limiting key from an HTTP request.
 // Returning an empty string skips rate limiting for that request.
 type KeyFunc func(*http.Request) string
 
 // Limiter implements rate limiting middleware.
 type Limiter struct {
-	store  store.Store
-	limit  int64
-	window time.Duration
-	keyFn  KeyFunc
+	store      store.Store
+	limit      int64
+	window     time.Duration
+	keyFn      KeyFunc
+	headerMode HeaderMode
 }
 
 // New creates a new rate limiter with the given store, limit, and window.
@@ -56,19 +76,22 @@ type Limiter struct {
 // If keyFn returns an empty string, rate limiting is skipped for that request.
 func New(st store.Store, limit int, window time.Duration, keyFn KeyFunc) *Limiter {
 	return &Limiter{
-		store:  st,
-		limit:  int64(limit),
-		window: window,
-		keyFn:  keyFn,
+		store:      st,
+		limit:      int64(limit),
+		window:     window,
+		keyFn:      keyFn,
+		headerMode: HeadersAlways,
 	}
 }
 
 // Handler returns the rate limiting middleware.
-// Sets the following headers on every request:
+// Sets the following headers based on header mode:
 //   - RateLimit-Limit: The rate limit ceiling for the current window
 //   - RateLimit-Remaining: Number of requests remaining in the current window
 //   - RateLimit-Reset: Unix timestamp when the current window resets
 //   - Retry-After: (only when limited) Seconds until the window resets
+//
+// These headers follow the IETF draft-ietf-httpapi-ratelimit-headers specification.
 func (l *Limiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := l.keyFn(r)
@@ -85,15 +108,21 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		}
 
 		remaining := max(0, l.limit-count)
-
 		resetTime := time.Now().Add(ttl).Unix()
+		exceeded := count > l.limit
 
-		w.Header().Set("RateLimit-Limit", strconv.FormatInt(l.limit, 10))
-		w.Header().Set("RateLimit-Remaining", strconv.FormatInt(remaining, 10))
-		w.Header().Set("RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+		shouldSetHeaders := l.headerMode == HeadersAlways || (l.headerMode == HeadersOnLimitExceeded && exceeded)
 
-		if count > l.limit {
-			w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
+		if shouldSetHeaders {
+			w.Header().Set("RateLimit-Limit", strconv.FormatInt(l.limit, 10))
+			w.Header().Set("RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+			w.Header().Set("RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+		}
+
+		if exceeded {
+			if shouldSetHeaders {
+				w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
+			}
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -188,18 +217,20 @@ func ByQueryParam(st store.Store, param string, limit int, window time.Duration)
 // This creates a composite key like "192.168.1.1:tenant-abc:GET:/api/users"
 // allowing fine-grained rate limiting per IP, tenant, and endpoint combination.
 type Builder struct {
-	store  store.Store
-	limit  int
-	window time.Duration
-	keyFns []KeyFunc
+	store      store.Store
+	limit      int
+	window     time.Duration
+	keyFns     []KeyFunc
+	headerMode HeaderMode
 }
 
 // NewBuilder creates a new rate limiter builder.
 // Use With* methods to add dimensions, then call Limit to build the middleware.
 func NewBuilder(st store.Store) *Builder {
 	return &Builder{
-		store:  st,
-		keyFns: make([]KeyFunc, 0),
+		store:      st,
+		keyFns:     make([]KeyFunc, 0),
+		headerMode: HeadersAlways,
 	}
 }
 
@@ -253,6 +284,25 @@ func (b *Builder) WithCustomKey(fn KeyFunc) *Builder {
 	return b
 }
 
+// WithHeaderMode configures when rate limit headers are included in responses.
+// This follows the IETF draft-ietf-httpapi-ratelimit-headers specification.
+//
+// Available modes:
+//   - HeadersAlways: Include headers on all responses (default)
+//   - HeadersOnLimitExceeded: Include headers only on 429 responses
+//   - HeadersNever: Never include headers
+//
+// Example:
+//
+//	limiter := ratelimit.NewBuilder(store).
+//		WithIP().
+//		WithHeaderMode(ratelimit.HeadersOnLimitExceeded).
+//		Limit(100, time.Minute)
+func (b *Builder) WithHeaderMode(mode HeaderMode) *Builder {
+	b.headerMode = mode
+	return b
+}
+
 // Limit sets the rate limit and window, returning the middleware handler.
 // All configured dimensions are combined into a single key using ":" as a separator.
 // If any dimension returns an empty string, rate limiting is skipped for that request.
@@ -278,5 +328,6 @@ func (b *Builder) Limit(limit int, window time.Duration) func(http.Handler) http
 	}
 
 	limiter := New(b.store, limit, window, keyFn)
+	limiter.headerMode = b.headerMode
 	return limiter.Handler
 }

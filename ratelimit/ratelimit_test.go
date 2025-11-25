@@ -1,6 +1,7 @@
 package ratelimit_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -337,6 +338,78 @@ func TestRateLimitHeaders(t *testing.T) {
 
 	if reset := rr.Header().Get("RateLimit-Reset"); reset == "" {
 		t.Error("expected RateLimit-Reset header")
+	}
+}
+
+func TestHeaderModes(t *testing.T) {
+	tests := []struct {
+		name                  string
+		mode                  ratelimit.HeaderMode
+		wantHeadersOnSuccess  bool
+		wantHeadersOnExceeded bool
+	}{
+		{
+			name:                  "HeadersAlways",
+			mode:                  ratelimit.HeadersAlways,
+			wantHeadersOnSuccess:  true,
+			wantHeadersOnExceeded: true,
+		},
+		{
+			name:                  "HeadersOnLimitExceeded",
+			mode:                  ratelimit.HeadersOnLimitExceeded,
+			wantHeadersOnSuccess:  false,
+			wantHeadersOnExceeded: true,
+		},
+		{
+			name:                  "HeadersNever",
+			mode:                  ratelimit.HeadersNever,
+			wantHeadersOnSuccess:  false,
+			wantHeadersOnExceeded: false,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := store.NewMemory()
+			defer st.Close()
+
+			handler := ratelimit.NewBuilder(st).
+				WithIP().
+				WithHeaderMode(tt.mode).
+				Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest("GET", "/test", http.NoBody)
+			req.RemoteAddr = fmt.Sprintf("192.168.1.%d:1234", 100+i)
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rr.Code)
+			}
+
+			hasHeaders := rr.Header().Get("RateLimit-Limit") != ""
+			if hasHeaders != tt.wantHeadersOnSuccess {
+				t.Errorf("success response: headers present = %v, want %v", hasHeaders, tt.wantHeadersOnSuccess)
+			}
+
+			rr = httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			rr = httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected 429, got %d", rr.Code)
+			}
+
+			hasHeaders = rr.Header().Get("RateLimit-Limit") != ""
+			if hasHeaders != tt.wantHeadersOnExceeded {
+				t.Errorf("exceeded response: headers present = %v, want %v", hasHeaders, tt.wantHeadersOnExceeded)
+			}
+		})
 	}
 }
 
