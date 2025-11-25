@@ -86,7 +86,7 @@ func TestAPIKey_Optional(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.OptionalAPIKey())
+	middleware := auth.APIKey(validator, auth.WithOptionalAPIKey())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -159,7 +159,7 @@ func TestAPIKey_WithMultipleOptions(t *testing.T) {
 
 	middleware := auth.APIKey(validator,
 		auth.WithAPIKeyHeader("X-Custom-Key"),
-		auth.OptionalAPIKey(),
+		auth.WithOptionalAPIKey(),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -183,7 +183,7 @@ func TestAPIKey_OptionalWithMissingKey(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.OptionalAPIKey())
+	middleware := auth.APIKey(validator, auth.WithOptionalAPIKey())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -311,7 +311,7 @@ func TestBearerToken_Optional(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator, auth.OptionalBearerToken())
+	middleware := auth.BearerToken(validator, auth.WithOptionalBearerToken())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -334,7 +334,7 @@ func TestBearerToken_OptionalWithMissingToken(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator, auth.OptionalBearerToken())
+	middleware := auth.BearerToken(validator, auth.WithOptionalBearerToken())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

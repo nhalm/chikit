@@ -8,14 +8,14 @@
 // Query parameter validation:
 //
 //	r.Use(validate.QueryParams(
-//		validate.Param("page", validate.Required(), validate.WithValidator(validate.Pattern(`^\d+$`))),
+//		validate.Param("page", validate.WithRequired(), validate.WithValidator(validate.Pattern(`^\d+$`))),
 //		validate.Param("limit", validate.WithDefault("10")),
 //	))
 //
 // Header validation:
 //
 //	r.Use(validate.Headers(
-//		validate.Header("Content-Type", validate.RequiredHeader(), validate.WithAllowList("application/json")),
+//		validate.Header("Content-Type", validate.WithRequiredHeader(), validate.WithAllowList("application/json")),
 //	))
 //
 // Body size limiting:
@@ -144,7 +144,7 @@ type QueryParamRule struct {
 // Example:
 //
 //	r.Use(validate.QueryParams(
-//		validate.Param("page", validate.Required(), validate.WithValidator(validate.Pattern(`^\d+$`))),
+//		validate.Param("page", validate.WithRequired(), validate.WithValidator(validate.Pattern(`^\d+$`))),
 //		validate.Param("limit", validate.WithDefault("10"), validate.WithValidator(validate.MinLength(1))),
 //		validate.Param("sort", validate.WithValidator(validate.OneOf("asc", "desc"))),
 //	))
@@ -181,8 +181,8 @@ func QueryParams(rules ...QueryParamRule) func(http.Handler) http.Handler {
 	}
 }
 
-// Required marks a query parameter as required.
-func Required() func(*QueryParamRule) {
+// WithRequired marks a query parameter as required.
+func WithRequired() func(*QueryParamRule) {
 	return func(r *QueryParamRule) {
 		r.Required = true
 	}
@@ -240,7 +240,7 @@ type HeaderRule struct {
 //
 //	r.Use(validate.Headers(
 //		validate.Header("Content-Type",
-//			validate.RequiredHeader(),
+//			validate.WithRequiredHeader(),
 //			validate.WithAllowList("application/json", "application/xml")),
 //		validate.Header("X-Custom-Header",
 //			validate.WithDenyList("forbidden-value")),
@@ -310,8 +310,8 @@ func Header(name string, opts ...func(*HeaderRule)) HeaderRule {
 	return rule
 }
 
-// RequiredHeader marks a header as required.
-func RequiredHeader() func(*HeaderRule) {
+// WithRequiredHeader marks a header as required.
+func WithRequiredHeader() func(*HeaderRule) {
 	return func(r *HeaderRule) {
 		r.Required = true
 	}

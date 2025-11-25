@@ -77,7 +77,7 @@ type APIKeyConfig struct {
 //
 // Optional authentication:
 //
-//	r.Use(auth.APIKey(validator, auth.OptionalAPIKey()))
+//	r.Use(auth.APIKey(validator, auth.WithOptionalAPIKey()))
 func APIKey(validator APIKeyValidator, opts ...APIKeyOption) func(http.Handler) http.Handler {
 	config := APIKeyConfig{
 		Header:    "X-API-Key",
@@ -124,10 +124,10 @@ func WithAPIKeyHeader(header string) APIKeyOption {
 	}
 }
 
-// OptionalAPIKey makes the API key optional.
+// WithOptionalAPIKey makes the API key optional.
 // When set, requests without an API key are allowed through without validation.
 // The API key will not be present in the context for these requests.
-func OptionalAPIKey() APIKeyOption {
+func WithOptionalAPIKey() APIKeyOption {
 	return func(c *APIKeyConfig) {
 		c.Optional = true
 	}
@@ -177,7 +177,7 @@ type BearerTokenConfig struct {
 //
 // Optional authentication:
 //
-//	r.Use(auth.BearerToken(validator, auth.OptionalBearerToken()))
+//	r.Use(auth.BearerToken(validator, auth.WithOptionalBearerToken()))
 func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func(http.Handler) http.Handler {
 	config := BearerTokenConfig{
 		Validator: validator,
@@ -227,10 +227,10 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 // BearerTokenOption configures BearerToken middleware.
 type BearerTokenOption func(*BearerTokenConfig)
 
-// OptionalBearerToken makes the bearer token optional.
+// WithOptionalBearerToken makes the bearer token optional.
 // When set, requests without a bearer token are allowed through without validation.
 // The token will not be present in the context for these requests.
-func OptionalBearerToken() BearerTokenOption {
+func WithOptionalBearerToken() BearerTokenOption {
 	return func(c *BearerTokenConfig) {
 		c.Optional = true
 	}

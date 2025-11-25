@@ -63,7 +63,7 @@ func TestQueryParams_Required(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	middleware := validate.QueryParams(
-		validate.Param("user", validate.Required()),
+		validate.Param("user", validate.WithRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -81,7 +81,7 @@ func TestQueryParams_MissingRequired(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	middleware := validate.QueryParams(
-		validate.Param("user", validate.Required()),
+		validate.Param("user", validate.WithRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -157,7 +157,7 @@ func TestHeaders_Required(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	middleware := validate.Headers(
-		validate.Header("X-API-Key", validate.RequiredHeader()),
+		validate.Header("X-API-Key", validate.WithRequiredHeader()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -175,7 +175,7 @@ func TestHeaders_MissingRequired(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	middleware := validate.Headers(
-		validate.Header("X-API-Key", validate.RequiredHeader()),
+		validate.Header("X-API-Key", validate.WithRequiredHeader()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
