@@ -1,8 +1,9 @@
 // Package validate provides middleware for request validation.
 //
 // The package offers validation for query parameters, headers, and request body size.
-// All validation middleware returns 400 (Bad Request) for validation failures, except
-// MaxBodySize which returns 413 (Payload Too Large) by default.
+// All validation middleware returns 400 (Bad Request) for validation failures.
+// MaxBodySize wraps the request body with http.MaxBytesReader; downstream handlers
+// must check for errors when reading the body to detect size limit violations.
 //
 // Query parameter validation:
 //
@@ -25,7 +26,6 @@ package validate
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 )
@@ -42,10 +42,17 @@ type MaxBodySizeConfig struct {
 	Message string
 }
 
-// MaxBodySize returns middleware that limits request body size.
-// Uses http.MaxBytesReader which wraps the request body and prevents reading beyond
-// the specified limit. When the limit is exceeded, returns 413 (Payload Too Large)
-// by default. The limit is applied before the request reaches downstream handlers.
+// MaxBodySize returns middleware that limits request body size using http.MaxBytesReader.
+// This middleware wraps the request body to prevent reading beyond the specified limit.
+//
+// IMPORTANT: This middleware only wraps the body - it does NOT automatically send error responses.
+// Downstream handlers must handle errors when reading the body. When the limit is exceeded,
+// the body reader will return an error of type *http.MaxBytesError. Your handler should check
+// for this error type and respond appropriately.
+//
+// The StatusCode and Message fields in MaxBodySizeConfig are provided for convenience but are
+// not used by this middleware itself. Downstream handlers should use these values when crafting
+// their error responses.
 //
 // Example:
 //
@@ -56,6 +63,22 @@ type MaxBodySizeConfig struct {
 //	r.Use(validate.MaxBodySize(1024,
 //		validate.WithBodySizeStatus(http.StatusBadRequest),
 //		validate.WithBodySizeMessage("Request too large")))
+//
+// Example handler that checks for body size errors:
+//
+//	func handler(w http.ResponseWriter, r *http.Request) {
+//		body, err := io.ReadAll(r.Body)
+//		if err != nil {
+//			var maxBytesErr *http.MaxBytesError
+//			if errors.As(err, &maxBytesErr) {
+//				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+//				return
+//			}
+//			http.Error(w, "Failed to read body", http.StatusInternalServerError)
+//			return
+//		}
+//		// ... process body
+//	}
 func MaxBodySize(maxBytes int64, opts ...MaxBodySizeOption) func(http.Handler) http.Handler {
 	config := MaxBodySizeConfig{
 		MaxBytes:   maxBytes,
@@ -115,7 +138,7 @@ type QueryParamRule struct {
 // IMPORTANT: This middleware modifies the request URL by setting default values for missing
 // parameters. The modified URL is available to downstream handlers via r.URL.Query().
 //
-// Note: If both Required and Default are set, Default is ignored since the parameter
+// Note: When Required is true, the Default value has no effect since the parameter
 // must be present.
 //
 // Example:
@@ -351,15 +374,12 @@ func MaxLength(maxLen int) func(string) error {
 }
 
 // Pattern is a validator that checks if a value matches a regex pattern.
-// The value is URL-decoded before matching, allowing validation of encoded query parameters.
+// Note: Query parameter values from r.URL.Query() are already URL-decoded by Go's
+// query parser, so this validator works directly with the decoded values.
 func Pattern(pattern string) func(string) error {
 	re := regexp.MustCompile(pattern)
 	return func(val string) error {
-		matched, err := url.QueryUnescape(val)
-		if err != nil {
-			return fmt.Errorf("invalid value")
-		}
-		if !re.MatchString(matched) {
+		if !re.MatchString(val) {
 			return fmt.Errorf("must match pattern: %s", pattern)
 		}
 		return nil

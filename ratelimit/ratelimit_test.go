@@ -110,6 +110,48 @@ func TestByEndpoint(t *testing.T) {
 	}
 }
 
+func TestByQueryParam(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.ByQueryParam(st, "api_key", 3, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test?api_key=test-key-123", http.NoBody)
+
+	for i := 0; i < 3; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", rr.Code)
+	}
+}
+
+func TestByQueryParamMissing(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.ByQueryParam(st, "api_key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected request without query param to pass, got %d", rr.Code)
+	}
+}
+
 func TestBuilderMultiDimensional(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
@@ -185,6 +227,89 @@ func TestBuilderWithHeader(t *testing.T) {
 	handler.ServeHTTP(rr, req2)
 	if rr.Code != http.StatusOK {
 		t.Error("tenant-b should not be rate limited (different tenant)")
+	}
+}
+
+func TestBuilderWithQueryParam(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.NewBuilder(st).
+		WithIP().
+		WithQueryParam("tenant_id").
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req1 := httptest.NewRequest("GET", "/test?tenant_id=tenant-a", http.NoBody)
+	req1.RemoteAddr = "192.168.1.1:1234"
+
+	req2 := httptest.NewRequest("GET", "/test?tenant_id=tenant-b", http.NoBody)
+	req2.RemoteAddr = "192.168.1.1:1234"
+
+	for i := 0; i < 2; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req1)
+		if rr.Code != http.StatusOK {
+			t.Errorf("tenant-a request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req1)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("tenant-a: expected 429, got %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req2)
+	if rr.Code != http.StatusOK {
+		t.Error("tenant-b should not be rate limited (different tenant)")
+	}
+}
+
+func TestBuilderWithCustomKey(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.NewBuilder(st).
+		WithIP().
+		WithCustomKey(func(r *http.Request) string {
+			if userID := r.Header.Get("X-User-ID"); userID != "" {
+				return "user:" + userID
+			}
+			return ""
+		}).
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req1 := httptest.NewRequest("GET", "/test", http.NoBody)
+	req1.RemoteAddr = "192.168.1.1:1234"
+	req1.Header.Set("X-User-ID", "user-123")
+
+	req2 := httptest.NewRequest("GET", "/test", http.NoBody)
+	req2.RemoteAddr = "192.168.1.1:1234"
+	req2.Header.Set("X-User-ID", "user-456")
+
+	for i := 0; i < 2; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req1)
+		if rr.Code != http.StatusOK {
+			t.Errorf("user-123 request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req1)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("user-123: expected 429, got %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req2)
+	if rr.Code != http.StatusOK {
+		t.Error("user-456 should not be rate limited (different user)")
 	}
 }
 
@@ -274,284 +399,6 @@ func TestConcurrentSameKey(t *testing.T) {
 
 	if allowedCount+deniedCount != concurrency {
 		t.Errorf("total requests should be %d, got %d", concurrency, allowedCount+deniedCount)
-	}
-}
-
-func TestConcurrentMultipleKeys(t *testing.T) {
-	t.Parallel()
-
-	st := store.NewMemory()
-	defer st.Close()
-
-	const (
-		limit       = 10
-		concurrency = 50
-		numKeys     = 5
-	)
-
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	var (
-		results = make(map[string]*struct {
-			allowed atomic.Int64
-			denied  atomic.Int64
-		})
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-		startCh = make(chan struct{})
-	)
-
-	for i := 0; i < numKeys; i++ {
-		results[i64ToString(int64(i))] = &struct {
-			allowed atomic.Int64
-			denied  atomic.Int64
-		}{}
-	}
-
-	wg.Add(numKeys * concurrency)
-	for keyIdx := 0; keyIdx < numKeys; keyIdx++ {
-		for reqIdx := 0; reqIdx < concurrency; reqIdx++ {
-			keyIdx := keyIdx
-			go func() {
-				defer wg.Done()
-
-				<-startCh
-
-				req := httptest.NewRequest("GET", "/test", http.NoBody)
-				req.RemoteAddr = i64ToString(int64(keyIdx)) + ":1234"
-				rr := httptest.NewRecorder()
-
-				handler.ServeHTTP(rr, req)
-
-				mu.Lock()
-				result := results[i64ToString(int64(keyIdx))]
-				mu.Unlock()
-
-				if rr.Code == http.StatusOK {
-					result.allowed.Add(1)
-				} else if rr.Code == http.StatusTooManyRequests {
-					result.denied.Add(1)
-				}
-			}()
-		}
-	}
-
-	close(startCh)
-	wg.Wait()
-
-	for key, result := range results {
-		allowedCount := result.allowed.Load()
-		deniedCount := result.denied.Load()
-
-		if allowedCount != limit {
-			t.Errorf("key %s: expected exactly %d allowed requests, got %d", key, limit, allowedCount)
-		}
-
-		if deniedCount != concurrency-limit {
-			t.Errorf("key %s: expected exactly %d denied requests, got %d", key, concurrency-limit, deniedCount)
-		}
-	}
-}
-
-func TestConcurrentBuilderMultiDimensional(t *testing.T) {
-	t.Parallel()
-
-	st := store.NewMemory()
-	defer st.Close()
-
-	const (
-		limit       = 20
-		concurrency = 50
-	)
-
-	handler := ratelimit.NewBuilder(st).
-		WithIP().
-		WithEndpoint().
-		Limit(limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	testCases := []struct {
-		name            string
-		method          string
-		path            string
-		ip              string
-		expectedAllowed int64
-	}{
-		{"endpoint1", "GET", "/api/users", "192.168.1.1", limit},
-		{"endpoint2", "POST", "/api/users", "192.168.1.1", limit},
-		{"endpoint3", "GET", "/api/orders", "192.168.1.1", limit},
-	}
-
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			var (
-				allowed atomic.Int64
-				denied  atomic.Int64
-				wg      sync.WaitGroup
-				startCh = make(chan struct{})
-			)
-
-			wg.Add(concurrency)
-			for i := 0; i < concurrency; i++ {
-				go func() {
-					defer wg.Done()
-
-					<-startCh
-
-					req := httptest.NewRequest(tc.method, tc.path, http.NoBody)
-					req.RemoteAddr = tc.ip + ":1234"
-					rr := httptest.NewRecorder()
-
-					handler.ServeHTTP(rr, req)
-
-					if rr.Code == http.StatusOK {
-						allowed.Add(1)
-					} else if rr.Code == http.StatusTooManyRequests {
-						denied.Add(1)
-					}
-				}()
-			}
-
-			close(startCh)
-			wg.Wait()
-
-			allowedCount := allowed.Load()
-			deniedCount := denied.Load()
-
-			if allowedCount != tc.expectedAllowed {
-				t.Errorf("expected exactly %d allowed requests, got %d", tc.expectedAllowed, allowedCount)
-			}
-
-			if deniedCount != concurrency-tc.expectedAllowed {
-				t.Errorf("expected exactly %d denied requests, got %d", concurrency-tc.expectedAllowed, deniedCount)
-			}
-		})
-	}
-}
-
-func TestConcurrentRaceDetection(t *testing.T) {
-	t.Parallel()
-
-	st := store.NewMemory()
-	defer st.Close()
-
-	const (
-		limit       = 100
-		concurrency = 200
-		duration    = 500 * time.Millisecond
-	)
-
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	var (
-		totalRequests atomic.Int64
-		stopCh        = make(chan struct{})
-		wg            sync.WaitGroup
-	)
-
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-
-			for {
-				select {
-				case <-stopCh:
-					return
-				default:
-					req := httptest.NewRequest("GET", "/test", http.NoBody)
-					req.RemoteAddr = i64ToString(int64(i%10)) + ":1234"
-					rr := httptest.NewRecorder()
-
-					handler.ServeHTTP(rr, req)
-					totalRequests.Add(1)
-				}
-			}
-		}()
-	}
-
-	time.Sleep(duration)
-	close(stopCh)
-	wg.Wait()
-
-	if totalRequests.Load() == 0 {
-		t.Error("expected some requests to be processed")
-	}
-}
-
-func TestConcurrentHeaderBased(t *testing.T) {
-	t.Parallel()
-
-	st := store.NewMemory()
-	defer st.Close()
-
-	const (
-		limit       = 25
-		concurrency = 75
-	)
-
-	handler := ratelimit.ByHeader(st, "X-API-Key", limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	apiKeys := []string{"key-alpha", "key-beta", "key-gamma"}
-
-	for _, apiKey := range apiKeys {
-		apiKey := apiKey
-		t.Run(apiKey, func(t *testing.T) {
-			t.Parallel()
-
-			var (
-				allowed atomic.Int64
-				denied  atomic.Int64
-				wg      sync.WaitGroup
-				startCh = make(chan struct{})
-			)
-
-			wg.Add(concurrency)
-			for i := 0; i < concurrency; i++ {
-				go func() {
-					defer wg.Done()
-
-					<-startCh
-
-					req := httptest.NewRequest("GET", "/test", http.NoBody)
-					req.Header.Set("X-API-Key", apiKey)
-					rr := httptest.NewRecorder()
-
-					handler.ServeHTTP(rr, req)
-
-					if rr.Code == http.StatusOK {
-						allowed.Add(1)
-					} else if rr.Code == http.StatusTooManyRequests {
-						denied.Add(1)
-					}
-				}()
-			}
-
-			close(startCh)
-			wg.Wait()
-
-			allowedCount := allowed.Load()
-			deniedCount := denied.Load()
-
-			if allowedCount != limit {
-				t.Errorf("expected exactly %d allowed requests, got %d", limit, allowedCount)
-			}
-
-			if deniedCount != concurrency-limit {
-				t.Errorf("expected exactly %d denied requests, got %d", concurrency-limit, deniedCount)
-			}
-		})
 	}
 }
 

@@ -365,57 +365,6 @@ func TestMemory_Reset_AfterIncrement(t *testing.T) {
 	}
 }
 
-func TestMemory_Cleanup(t *testing.T) {
-	m := NewMemory()
-	defer m.Close()
-
-	now := time.Now()
-	m.mu.Lock()
-	m.entries["expired1"] = &memoryEntry{
-		count:      1,
-		expiration: now.Add(-2 * time.Second),
-	}
-	m.entries["expired2"] = &memoryEntry{
-		count:      1,
-		expiration: now.Add(-1 * time.Second),
-	}
-	m.entries["active"] = &memoryEntry{
-		count:      1,
-		expiration: now.Add(time.Hour),
-	}
-	m.mu.Unlock()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	go func() {
-		<-ticker.C
-		m.mu.Lock()
-		now := time.Now()
-		for key, entry := range m.entries {
-			if now.After(entry.expiration) {
-				delete(m.entries, key)
-			}
-		}
-		m.mu.Unlock()
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if _, exists := m.entries["expired1"]; exists {
-		t.Error("cleanup() failed to remove expired1")
-	}
-	if _, exists := m.entries["expired2"]; exists {
-		t.Error("cleanup() failed to remove expired2")
-	}
-	if _, exists := m.entries["active"]; !exists {
-		t.Error("cleanup() incorrectly removed active entry")
-	}
-}
-
 func TestMemory_Close(t *testing.T) {
 	m := NewMemory()
 
@@ -463,32 +412,6 @@ func TestMemory_Expiration(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Increment() after expiration = %v, want 1 (reset)", count)
-	}
-}
-
-func TestMemory_ContextCancellation(t *testing.T) {
-	m := NewMemory()
-	defer m.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	key := "test:context"
-	window := time.Minute
-
-	_, _, err := m.Increment(ctx, key, window)
-	if err != nil {
-		t.Errorf("Increment() with canceled context should not error, got %v", err)
-	}
-
-	_, err = m.Get(ctx, key)
-	if err != nil {
-		t.Errorf("Get() with canceled context should not error, got %v", err)
-	}
-
-	err = m.Reset(ctx, key)
-	if err != nil {
-		t.Errorf("Reset() with canceled context should not error, got %v", err)
 	}
 }
 

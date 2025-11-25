@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,9 +154,9 @@ func TestMetrics_Reset(t *testing.T) {
 func TestTrack_ContextCancellation(t *testing.T) {
 	metrics := slo.NewMetrics(100)
 
-	exportCalled := 0
+	var exportCalled atomic.Int64
 	exporter := func(_ slo.Stats) {
-		exportCalled++
+		exportCalled.Add(1)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +179,7 @@ func TestTrack_ContextCancellation(t *testing.T) {
 
 	time.Sleep(120 * time.Millisecond)
 
-	beforeCancel := exportCalled
+	beforeCancel := exportCalled.Load()
 	if beforeCancel < 1 {
 		t.Fatalf("expected at least 1 export before cancel, got %d", beforeCancel)
 	}
@@ -186,7 +187,7 @@ func TestTrack_ContextCancellation(t *testing.T) {
 	cancel()
 	time.Sleep(120 * time.Millisecond)
 
-	afterCancel := exportCalled
+	afterCancel := exportCalled.Load()
 	if afterCancel != beforeCancel {
 		t.Errorf("expected no more exports after cancel, before=%d after=%d", beforeCancel, afterCancel)
 	}

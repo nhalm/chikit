@@ -11,7 +11,7 @@ import (
 // Redis is a Redis-backed implementation of Store suitable for distributed deployments.
 // Uses Redis atomic operations (INCR, EXPIRE) to ensure rate limit accuracy across
 // multiple instances in Kubernetes or other distributed environments. All operations
-// use pipelining for efficiency while maintaining atomicity.
+// use pipelining for efficiency.
 type Redis struct {
 	client *redis.Client
 	prefix string
@@ -70,8 +70,10 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 }
 
 // Increment atomically increments the counter for the given key using Redis INCR and EXPIRENX.
-// Uses pipelining to execute INCR, EXPIRENX, and TTL as a single atomic operation,
-// ensuring accurate rate limiting under high concurrent load across multiple instances.
+// Uses pipelining to batch INCR, EXPIRENX, and TTL commands into a single round-trip to Redis.
+// Note: While pipelining reduces network latency, it does not provide atomicity - other clients
+// may interleave commands between the pipelined operations. For true atomicity, consider using
+// Redis Lua scripts if needed.
 // Returns the new count, time remaining until window reset, and any error.
 func (r *Redis) Increment(ctx context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	fullKey := r.prefix + key
