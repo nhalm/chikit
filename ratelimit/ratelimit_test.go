@@ -394,6 +394,156 @@ func TestHeaderModes(t *testing.T) {
 	}
 }
 
+func TestBuilder_WithName(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.NewBuilder(st).
+		WithName("global").
+		WithIP().
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.1:1234"
+
+	for i := 0; i < 2; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", rr.Code)
+	}
+
+	count, err := st.Get(context.Background(), "global:192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to get key: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected count 3 for key 'global:192.168.1.1', got %d", count)
+	}
+}
+
+func TestBuilder_WithName_MultiDimension(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.NewBuilder(st).
+		WithName("api").
+		WithIP().
+		WithHeader("X-Tenant-ID").
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.1:1234"
+	req.Header.Set("X-Tenant-ID", "tenant-123")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+
+	count, err := st.Get(context.Background(), "api:192.168.1.1:tenant-123")
+	if err != nil {
+		t.Fatalf("failed to get key: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected count 1 for key 'api:192.168.1.1:tenant-123', got %d", count)
+	}
+}
+
+func TestBuilder_LayeredLimiters(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	globalLimiter := ratelimit.NewBuilder(st).
+		WithName("global").
+		WithIP().
+		Limit(5, time.Minute)
+
+	endpointLimiter := ratelimit.NewBuilder(st).
+		WithName("endpoint").
+		WithIP().
+		WithEndpoint().
+		Limit(2, time.Minute)
+
+	handler := globalLimiter(endpointLimiter(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest("GET", "/api/users", http.NoBody)
+	req.RemoteAddr = "192.168.1.1:1234"
+
+	for i := 0; i < 2; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 from endpoint limiter, got %d", rr.Code)
+	}
+
+	globalCount, err := st.Get(context.Background(), "global:192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to get global key: %v", err)
+	}
+	if globalCount != 3 {
+		t.Errorf("expected global count 3, got %d", globalCount)
+	}
+
+	endpointCount, err := st.Get(context.Background(), "endpoint:192.168.1.1:GET:/api/users")
+	if err != nil {
+		t.Fatalf("failed to get endpoint key: %v", err)
+	}
+	if endpointCount != 3 {
+		t.Errorf("expected endpoint count 3, got %d", endpointCount)
+	}
+}
+
+func TestBuilder_WithName_Empty(t *testing.T) {
+	st := store.NewMemory()
+	defer st.Close()
+
+	handler := ratelimit.NewBuilder(st).
+		WithName("").
+		WithIP().
+		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.1:1234"
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+
+	count, err := st.Get(context.Background(), "192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to get key: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected count 1 for key '192.168.1.1', got %d", count)
+	}
+}
+
 func TestConcurrentSameKey(t *testing.T) {
 	t.Parallel()
 

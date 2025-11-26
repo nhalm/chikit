@@ -218,6 +218,7 @@ func ByQueryParam(st store.Store, param string, limit int, window time.Duration)
 // allowing fine-grained rate limiting per IP, tenant, and endpoint combination.
 type Builder struct {
 	store      store.Store
+	name       string
 	limit      int
 	window     time.Duration
 	keyFns     []KeyFunc
@@ -232,6 +233,13 @@ func NewBuilder(st store.Store) *Builder {
 		keyFns:     make([]KeyFunc, 0),
 		headerMode: HeadersAlways,
 	}
+}
+
+// WithName sets an identifier for this rate limiter, prepended to all keys.
+// Use to prevent key collisions when layering multiple rate limiters.
+func (b *Builder) WithName(name string) *Builder {
+	b.name = name
+	return b
 }
 
 // WithIP adds IP address to the rate limiting key.
@@ -315,7 +323,12 @@ func (b *Builder) Limit(limit int, window time.Duration) func(http.Handler) http
 	b.window = window
 
 	keyFn := func(r *http.Request) string {
-		parts := make([]string, 0, len(b.keyFns))
+		parts := make([]string, 0, len(b.keyFns)+1)
+
+		if b.name != "" {
+			parts = append(parts, b.name)
+		}
+
 		for _, fn := range b.keyFns {
 			if part := fn(r); part != "" {
 				parts = append(parts, part)

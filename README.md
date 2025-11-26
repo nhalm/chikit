@@ -154,6 +154,70 @@ r.Use(ratelimit.NewBuilder(st).
     Limit(100, time.Minute))
 ```
 
+### Layered Rate Limiting
+
+When applying multiple rate limiters to the same routes, use `WithName()` to prevent key collisions:
+
+```go
+st := store.NewMemory()
+defer st.Close()
+
+// Global limit: 1000 requests per hour per IP
+globalLimiter := ratelimit.NewBuilder(st).
+    WithName("global").
+    WithIP().
+    Limit(1000, time.Hour)
+
+// Endpoint-specific limit: 10 requests per minute per IP+endpoint
+endpointLimiter := ratelimit.NewBuilder(st).
+    WithName("endpoint").
+    WithIP().
+    WithEndpoint().
+    Limit(10, time.Minute)
+
+// Apply both limiters
+r.Use(globalLimiter)
+r.Use(endpointLimiter)
+```
+
+Without `WithName()`, the keys would collide because both limiters use `WithIP()`. The name is prepended to the key:
+
+```
+// Without WithName():
+192.168.1.1                           // Both limiters use this key - collision!
+
+// With WithName():
+global:192.168.1.1                    // Global limiter
+endpoint:192.168.1.1:GET:/api/users   // Endpoint limiter - independent
+```
+
+This pattern is useful for implementing tiered rate limits:
+
+```go
+// Tier 1: Broad protection (DDoS prevention)
+r.Use(ratelimit.NewBuilder(st).
+    WithName("ddos").
+    WithIP().
+    Limit(10000, time.Hour))
+
+// Tier 2: API endpoint protection
+r.Route("/api", func(r chi.Router) {
+    r.Use(ratelimit.NewBuilder(st).
+        WithName("api").
+        WithIP().
+        WithEndpoint().
+        Limit(100, time.Minute))
+})
+
+// Tier 3: Expensive operation protection
+r.Post("/api/analytics/run", func(r chi.Router) {
+    r.Use(ratelimit.NewBuilder(st).
+        WithName("analytics").
+        WithHeader("X-User-ID").
+        Limit(5, time.Hour))
+})
+```
+
 ## Header Management
 
 ### Generic Header to Context
@@ -653,7 +717,10 @@ func main() {
     defer st.Close()
 
     // Global rate limit: 1000 requests per hour per IP
-    r.Use(ratelimit.ByIP(st, 1000, time.Hour))
+    r.Use(ratelimit.NewBuilder(st).
+        WithName("global").
+        WithIP().
+        Limit(1000, time.Hour))
 
     // API routes
     r.Route("/api/v1", func(r chi.Router) {
@@ -664,6 +731,7 @@ func main() {
 
         // Per-tenant rate limiting: 100 requests per minute
         r.Use(ratelimit.NewBuilder(st).
+            WithName("tenant").
             WithIP().
             WithHeader("X-Tenant-ID").
             Limit(100, time.Minute))
