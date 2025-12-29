@@ -13,6 +13,7 @@ import (
 
 	"github.com/nhalm/chikit/ratelimit"
 	"github.com/nhalm/chikit/ratelimit/store"
+	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestSimpleAPI(t *testing.T) {
@@ -27,7 +28,7 @@ func TestSimpleAPI(t *testing.T) {
 			middleware: func(h http.Handler) http.Handler {
 				st := store.NewMemory()
 				t.Cleanup(func() { st.Close() })
-				return ratelimit.ByIP(st, 2, time.Minute)(h)
+				return wrapper.Handler()(ratelimit.ByIP(st, 2, time.Minute)(h))
 			},
 			setupRequest: func(r *http.Request) {
 				r.RemoteAddr = "192.168.1.1:1234"
@@ -39,7 +40,7 @@ func TestSimpleAPI(t *testing.T) {
 			middleware: func(h http.Handler) http.Handler {
 				st := store.NewMemory()
 				t.Cleanup(func() { st.Close() })
-				return ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(h)
+				return wrapper.Handler()(ratelimit.ByHeader(st, "X-API-Key", 3, time.Minute)(h))
 			},
 			setupRequest: func(r *http.Request) {
 				r.Header.Set("X-API-Key", "test-key")
@@ -51,7 +52,7 @@ func TestSimpleAPI(t *testing.T) {
 			middleware: func(h http.Handler) http.Handler {
 				st := store.NewMemory()
 				t.Cleanup(func() { st.Close() })
-				return ratelimit.ByEndpoint(st, 2, time.Minute)(h)
+				return wrapper.Handler()(ratelimit.ByEndpoint(st, 2, time.Minute)(h))
 			},
 			setupRequest: func(_ *http.Request) {},
 			limit:        2,
@@ -61,7 +62,7 @@ func TestSimpleAPI(t *testing.T) {
 			middleware: func(h http.Handler) http.Handler {
 				st := store.NewMemory()
 				t.Cleanup(func() { st.Close() })
-				return ratelimit.ByQueryParam(st, "api_key", 3, time.Minute)(h)
+				return wrapper.Handler()(ratelimit.ByQueryParam(st, "api_key", 3, time.Minute)(h))
 			},
 			setupRequest: func(r *http.Request) {
 				r.URL.RawQuery = "api_key=test-key-123"
@@ -72,8 +73,8 @@ func TestSimpleAPI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := tt.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
+			handler := tt.middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				wrapper.SetResponse(r, http.StatusOK, nil)
 			}))
 
 			req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -104,9 +105,9 @@ func TestByHeaderMissing(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByHeader(st, "X-API-Key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := wrapper.Handler()(ratelimit.ByHeader(st, "X-API-Key", 1, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 
@@ -121,9 +122,9 @@ func TestByQueryParamMissing(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByQueryParam(st, "api_key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := wrapper.Handler()(ratelimit.ByQueryParam(st, "api_key", 1, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 
@@ -138,12 +139,12 @@ func TestBuilderMultiDimensional(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithIP().
 		WithEndpoint().
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req1 := httptest.NewRequest("POST", "/api/v1/users", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
@@ -176,12 +177,12 @@ func TestBuilderWithHeader(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithIP().
 		WithHeader("X-Tenant-ID").
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req1 := httptest.NewRequest("GET", "/test", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
@@ -216,12 +217,12 @@ func TestBuilderWithQueryParam(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithIP().
 		WithQueryParam("tenant_id").
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req1 := httptest.NewRequest("GET", "/test?tenant_id=tenant-a", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
@@ -254,7 +255,7 @@ func TestBuilderWithCustomKey(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithIP().
 		WithCustomKey(func(r *http.Request) string {
 			if userID := r.Header.Get("X-User-ID"); userID != "" {
@@ -262,9 +263,9 @@ func TestBuilderWithCustomKey(t *testing.T) {
 			}
 			return ""
 		}).
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req1 := httptest.NewRequest("GET", "/test", http.NoBody)
 	req1.RemoteAddr = "192.168.1.1:1234"
@@ -299,9 +300,9 @@ func TestRateLimitHeaders(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.ByIP(st, 5, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := wrapper.Handler()(ratelimit.ByIP(st, 5, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -354,12 +355,12 @@ func TestHeaderModes(t *testing.T) {
 			st := store.NewMemory()
 			defer st.Close()
 
-			handler := ratelimit.NewBuilder(st).
+			handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 				WithIP().
 				WithHeaderMode(tt.mode).
-				Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			}))
+				Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				wrapper.SetResponse(r, http.StatusOK, nil)
+			})))
 
 			req := httptest.NewRequest("GET", "/test", http.NoBody)
 			req.RemoteAddr = fmt.Sprintf("192.168.1.%d:1234", 100+i)
@@ -398,12 +399,12 @@ func TestBuilder_WithName(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithName("global").
 		WithIP().
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -435,13 +436,13 @@ func TestBuilder_WithName_MultiDimension(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithName("api").
 		WithIP().
 		WithHeader("X-Tenant-ID").
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -477,9 +478,9 @@ func TestBuilder_LayeredLimiters(t *testing.T) {
 		WithEndpoint().
 		Limit(2, time.Minute)
 
-	handler := globalLimiter(endpointLimiter(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})))
+	handler := wrapper.Handler()(globalLimiter(endpointLimiter(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	}))))
 
 	req := httptest.NewRequest("GET", "/api/users", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -519,12 +520,12 @@ func TestBuilder_WithName_Empty(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := ratelimit.NewBuilder(st).
+	handler := wrapper.Handler()(ratelimit.NewBuilder(st).
 		WithName("").
 		WithIP().
-		Limit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+		Limit(2, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -555,9 +556,9 @@ func TestConcurrentSameKey(t *testing.T) {
 		concurrency = 100
 	)
 
-	handler := ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := wrapper.Handler()(ratelimit.ByIP(st, limit, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	var (
 		allowed atomic.Int64
@@ -627,9 +628,9 @@ func (e *errorStore) Close() error {
 func TestRateLimit_StoreError(t *testing.T) {
 	st := &errorStore{}
 
-	handler := ratelimit.ByIP(st, 10, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := wrapper.Handler()(ratelimit.ByIP(st, 10, time.Minute)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		wrapper.SetResponse(r, http.StatusOK, nil)
+	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -639,10 +640,5 @@ func TestRateLimit_StoreError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("expected status 500, got %d", rr.Code)
-	}
-
-	body := rr.Body.String()
-	if body != "Rate limit check failed\n" {
-		t.Errorf("expected error message 'Rate limit check failed', got %q", body)
 	}
 }
