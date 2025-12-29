@@ -1,11 +1,13 @@
 package auth_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/nhalm/chikit/auth"
+	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestAPIKey_Valid(t *testing.T) {
@@ -339,5 +341,163 @@ func TestBearerToken_OptionalWithMissingToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected status 200 with optional token, got %d", rec.Code)
+	}
+}
+
+func TestAPIKey_WithWrapper_MissingKey(t *testing.T) {
+	validator := func(key string) bool {
+		return key == "valid-key"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(auth.APIKey(validator)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %s", ct)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "auth_error" {
+		t.Errorf("expected error type auth_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Message != "Missing API key" {
+		t.Errorf("expected message 'Missing API key', got %s", resp["error"].Message)
+	}
+}
+
+func TestAPIKey_WithWrapper_InvalidKey(t *testing.T) {
+	validator := func(key string) bool {
+		return key == "valid-key"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("X-API-Key", "invalid-key")
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(auth.APIKey(validator)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Message != "Invalid API key" {
+		t.Errorf("expected message 'Invalid API key', got %s", resp["error"].Message)
+	}
+}
+
+func TestBearerToken_WithWrapper_Missing(t *testing.T) {
+	validator := func(token string) bool {
+		return token == "valid-token"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "auth_error" {
+		t.Errorf("expected error type auth_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Message != "Missing authorization header" {
+		t.Errorf("expected message 'Missing authorization header', got %s", resp["error"].Message)
+	}
+}
+
+func TestBearerToken_WithWrapper_InvalidFormat(t *testing.T) {
+	validator := func(token string) bool {
+		return token == "valid-token"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Message != "Invalid authorization format" {
+		t.Errorf("expected message 'Invalid authorization format', got %s", resp["error"].Message)
+	}
+}
+
+func TestBearerToken_WithWrapper_InvalidToken(t *testing.T) {
+	validator := func(token string) bool {
+		return token == "valid-token"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Message != "Invalid bearer token" {
+		t.Errorf("expected message 'Invalid bearer token', got %s", resp["error"].Message)
 	}
 }

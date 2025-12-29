@@ -2,6 +2,7 @@ package validate_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nhalm/chikit/validate"
+	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestMaxBodySize_WithinLimit(t *testing.T) {
@@ -366,5 +368,139 @@ func TestPattern_NumericPatternFails(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestQueryParams_WithWrapper_MissingRequired(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(validate.QueryParams(
+		validate.Param("user", validate.WithRequired()),
+	)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %s", ct)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Code != "missing_parameter" {
+		t.Errorf("expected code missing_parameter, got %s", resp["error"].Code)
+	}
+	if resp["error"].Param != "user" {
+		t.Errorf("expected param 'user', got %s", resp["error"].Param)
+	}
+}
+
+func TestQueryParams_WithWrapper_InvalidValue(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/?age=invalid", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(validate.QueryParams(
+		validate.Param("age", validate.WithValidator(validate.OneOf("18", "21", "25"))),
+	)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Code != "invalid_parameter" {
+		t.Errorf("expected code invalid_parameter, got %s", resp["error"].Code)
+	}
+	if resp["error"].Param != "age" {
+		t.Errorf("expected param 'age', got %s", resp["error"].Param)
+	}
+}
+
+func TestHeaders_WithWrapper_MissingRequired(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(validate.Headers(
+		validate.Header("X-API-Key", validate.WithRequiredHeader()),
+	)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Code != "missing_header" {
+		t.Errorf("expected code missing_header, got %s", resp["error"].Code)
+	}
+	if resp["error"].Param != "X-API-Key" {
+		t.Errorf("expected param 'X-API-Key', got %s", resp["error"].Param)
+	}
+}
+
+func TestHeaders_WithWrapper_NotInAllowList(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("X-Environment", "development")
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.Handler()(validate.Headers(
+		validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
+	)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Code != "invalid_header" {
+		t.Errorf("expected code invalid_header, got %s", resp["error"].Code)
 	}
 }

@@ -32,6 +32,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/nhalm/chikit/wrapper"
 )
 
 type contextKey string
@@ -98,12 +100,20 @@ func APIKey(validator APIKeyValidator, opts ...APIKeyOption) func(http.Handler) 
 					next.ServeHTTP(w, r)
 					return
 				}
-				http.Error(w, "Missing API key", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Missing API key"))
+				} else {
+					http.Error(w, "Missing API key", http.StatusUnauthorized)
+				}
 				return
 			}
 
 			if !config.Validator(key) {
-				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid API key"))
+				} else {
+					http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				}
 				return
 			}
 
@@ -197,24 +207,40 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 					next.ServeHTTP(w, r)
 					return
 				}
-				http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Missing authorization header"))
+				} else {
+					http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+				}
 				return
 			}
 
 			const prefix = "Bearer "
 			if !strings.HasPrefix(auth, prefix) {
-				http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid authorization format"))
+				} else {
+					http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
+				}
 				return
 			}
 
 			token := strings.TrimPrefix(auth, prefix)
 			if token == "" {
-				http.Error(w, "Empty bearer token", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Empty bearer token"))
+				} else {
+					http.Error(w, "Empty bearer token", http.StatusUnauthorized)
+				}
 				return
 			}
 
 			if !config.Validator(token) {
-				http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid bearer token"))
+				} else {
+					http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
+				}
 				return
 			}
 
