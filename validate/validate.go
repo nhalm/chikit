@@ -274,87 +274,96 @@ func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			useWrapper := wrapper.HasState(r.Context())
 
-			for _, rule := range rules {
-				value := r.Header.Get(rule.Name)
-
-				if value == "" {
-					if rule.Required {
-						if useWrapper {
-							wrapper.SetError(r, &wrapper.Error{
-								Type:    "validation_error",
-								Code:    "missing_header",
-								Message: fmt.Sprintf("Missing required header: %s", rule.Name),
-								Param:   rule.Name,
-								Status:  http.StatusBadRequest,
-							})
-						} else {
-							http.Error(w, fmt.Sprintf("Missing required header: %s", rule.Name), http.StatusBadRequest)
-						}
-						return
+			for i := range rules {
+				if err := validateHeader(r, &rules[i]); err != nil {
+					if useWrapper {
+						wrapper.SetError(r, err)
+					} else {
+						http.Error(w, err.Message, err.Status)
 					}
-					continue
-				}
-
-				checkValue := value
-				if !rule.CaseSensitive {
-					checkValue = strings.ToLower(value)
-				}
-
-				if len(rule.AllowedList) > 0 {
-					allowed := false
-					for _, a := range rule.AllowedList {
-						compareVal := a
-						if !rule.CaseSensitive {
-							compareVal = strings.ToLower(a)
-						}
-						if checkValue == compareVal {
-							allowed = true
-							break
-						}
-					}
-					if !allowed {
-						if useWrapper {
-							wrapper.SetError(r, &wrapper.Error{
-								Type:    "validation_error",
-								Code:    "invalid_header",
-								Message: fmt.Sprintf("Header %s value not in allowed list", rule.Name),
-								Param:   rule.Name,
-								Status:  http.StatusForbidden,
-							})
-						} else {
-							http.Error(w, fmt.Sprintf("Header %s value not in allowed list", rule.Name), http.StatusForbidden)
-						}
-						return
-					}
-				}
-
-				if len(rule.DeniedList) > 0 {
-					for _, d := range rule.DeniedList {
-						compareVal := d
-						if !rule.CaseSensitive {
-							compareVal = strings.ToLower(d)
-						}
-						if checkValue == compareVal {
-							if useWrapper {
-								wrapper.SetError(r, &wrapper.Error{
-									Type:    "validation_error",
-									Code:    "invalid_header",
-									Message: fmt.Sprintf("Header %s value is denied", rule.Name),
-									Param:   rule.Name,
-									Status:  http.StatusForbidden,
-								})
-							} else {
-								http.Error(w, fmt.Sprintf("Header %s value is denied", rule.Name), http.StatusForbidden)
-							}
-							return
-						}
-					}
+					return
 				}
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func validateHeader(r *http.Request, rule *HeaderConfig) *wrapper.Error {
+	value := r.Header.Get(rule.Name)
+
+	if value == "" {
+		if rule.Required {
+			return &wrapper.Error{
+				Type:    "validation_error",
+				Code:    "missing_header",
+				Message: fmt.Sprintf("Missing required header: %s", rule.Name),
+				Param:   rule.Name,
+				Status:  http.StatusBadRequest,
+			}
+		}
+		return nil
+	}
+
+	checkValue := value
+	if !rule.CaseSensitive {
+		checkValue = strings.ToLower(value)
+	}
+
+	if err := checkAllowList(rule, checkValue); err != nil {
+		return err
+	}
+
+	return checkDenyList(rule, checkValue)
+}
+
+func checkAllowList(rule *HeaderConfig, checkValue string) *wrapper.Error {
+	if len(rule.AllowedList) == 0 {
+		return nil
+	}
+
+	for _, a := range rule.AllowedList {
+		compareVal := a
+		if !rule.CaseSensitive {
+			compareVal = strings.ToLower(a)
+		}
+		if checkValue == compareVal {
+			return nil
+		}
+	}
+
+	return &wrapper.Error{
+		Type:    "validation_error",
+		Code:    "invalid_header",
+		Message: fmt.Sprintf("Header %s value not in allowed list", rule.Name),
+		Param:   rule.Name,
+		Status:  http.StatusForbidden,
+	}
+}
+
+func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
+	if len(rule.DeniedList) == 0 {
+		return nil
+	}
+
+	for _, d := range rule.DeniedList {
+		compareVal := d
+		if !rule.CaseSensitive {
+			compareVal = strings.ToLower(d)
+		}
+		if checkValue == compareVal {
+			return &wrapper.Error{
+				Type:    "validation_error",
+				Code:    "invalid_header",
+				Message: fmt.Sprintf("Header %s value is denied", rule.Name),
+				Param:   rule.Name,
+				Status:  http.StatusForbidden,
+			}
+		}
+	}
+
+	return nil
 }
 
 // Header creates a header validation rule with the given name and options.
