@@ -10,6 +10,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 
 ## Features
 
+- **Response Wrapper**: Context-based response handling with Stripe-style structured errors
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
@@ -24,6 +25,135 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 
 ```bash
 go get github.com/nhalm/chikit
+```
+
+## Response Wrapper
+
+The wrapper package provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and Stripe-style structured errors.
+
+### Basic Usage
+
+```go
+import (
+    "github.com/go-chi/chi/v5"
+    "github.com/nhalm/chikit/wrapper"
+)
+
+func main() {
+    r := chi.NewRouter()
+    r.Use(wrapper.Handler())  // Must be outermost middleware
+
+    r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+        user, err := createUser(r)
+        if err != nil {
+            wrapper.SetError(r, wrapper.ErrInternal.With("Failed to create user"))
+            return
+        }
+        wrapper.SetResponse(r, http.StatusCreated, user)
+    })
+}
+```
+
+### Structured Errors
+
+Errors follow Stripe's API error format:
+
+```go
+// Predefined sentinel errors
+wrapper.ErrBadRequest          // 400
+wrapper.ErrUnauthorized        // 401
+wrapper.ErrForbidden           // 403
+wrapper.ErrNotFound            // 404
+wrapper.ErrConflict            // 409
+wrapper.ErrUnprocessableEntity // 422
+wrapper.ErrRateLimited         // 429
+wrapper.ErrInternal            // 500
+
+// Customize message
+wrapper.SetError(r, wrapper.ErrNotFound.With("User not found"))
+
+// Customize message and parameter
+wrapper.SetError(r, wrapper.ErrBadRequest.WithParam("Invalid email format", "email"))
+```
+
+JSON response format:
+
+```json
+{
+  "error": {
+    "type": "not_found",
+    "code": "resource_not_found",
+    "message": "User not found"
+  }
+}
+```
+
+### Validation Errors
+
+For multiple field errors:
+
+```go
+wrapper.SetError(r, wrapper.NewValidationError([]wrapper.FieldError{
+    {Field: "email", Code: "required", Message: "Email is required"},
+    {Field: "age", Code: "min", Message: "Age must be at least 18"},
+}))
+```
+
+JSON response:
+
+```json
+{
+  "error": {
+    "type": "validation_error",
+    "code": "invalid_request",
+    "message": "Validation failed",
+    "errors": [
+      {"field": "email", "code": "required", "message": "Email is required"},
+      {"field": "age", "code": "min", "message": "Age must be at least 18"}
+    ]
+  }
+}
+```
+
+### Setting Headers
+
+```go
+wrapper.SetHeader(r, "X-Request-ID", requestID)
+wrapper.SetHeader(r, "X-RateLimit-Remaining", "99")
+wrapper.AddHeader(r, "X-Custom", "value1")
+wrapper.AddHeader(r, "X-Custom", "value2")  // Adds second value
+```
+
+### Dual-Mode Middleware
+
+Middleware can check if wrapper is present and fall back gracefully:
+
+```go
+func MyMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if err := validate(r); err != nil {
+            if wrapper.HasState(r.Context()) {
+                wrapper.SetError(r, wrapper.ErrBadRequest.With(err.Error()))
+            } else {
+                http.Error(w, err.Error(), http.StatusBadRequest)
+            }
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+```
+
+### Panic Recovery
+
+The Handler middleware automatically recovers from panics and returns a 500 error:
+
+```go
+r.Use(wrapper.Handler())
+
+r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
+    panic("something went wrong")  // Returns {"error": {"type": "internal_error", ...}}
+})
 ```
 
 ## Rate Limiting
