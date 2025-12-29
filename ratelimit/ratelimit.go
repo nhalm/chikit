@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/nhalm/chikit/ratelimit/store"
+	"github.com/nhalm/chikit/wrapper"
 )
 
 // HeaderMode controls when rate limit headers are included in responses.
@@ -101,9 +102,15 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		}
 
 		ctx := r.Context()
+		useWrapper := wrapper.HasState(ctx)
+
 		count, ttl, err := l.store.Increment(ctx, key, l.window)
 		if err != nil {
-			http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
+			if useWrapper {
+				wrapper.SetError(r, wrapper.ErrInternal.With("Rate limit check failed"))
+			} else {
+				http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -114,16 +121,30 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		shouldSetHeaders := l.headerMode == HeadersAlways || (l.headerMode == HeadersOnLimitExceeded && exceeded)
 
 		if shouldSetHeaders {
-			w.Header().Set("RateLimit-Limit", strconv.FormatInt(l.limit, 10))
-			w.Header().Set("RateLimit-Remaining", strconv.FormatInt(remaining, 10))
-			w.Header().Set("RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+			if useWrapper {
+				wrapper.SetHeader(r, "RateLimit-Limit", strconv.FormatInt(l.limit, 10))
+				wrapper.SetHeader(r, "RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+				wrapper.SetHeader(r, "RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+			} else {
+				w.Header().Set("RateLimit-Limit", strconv.FormatInt(l.limit, 10))
+				w.Header().Set("RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+				w.Header().Set("RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+			}
 		}
 
 		if exceeded {
 			if shouldSetHeaders {
-				w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
+				if useWrapper {
+					wrapper.SetHeader(r, "Retry-After", strconv.Itoa(int(ttl.Seconds())))
+				} else {
+					w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
+				}
 			}
-			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			if useWrapper {
+				wrapper.SetError(r, wrapper.ErrRateLimited)
+			} else {
+				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			}
 			return
 		}
 

@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/nhalm/chikit/wrapper"
 )
 
 // MaxBodySizeConfig configures the MaxBodySize middleware.
@@ -153,12 +155,24 @@ func QueryParams(rules ...QueryParamConfig) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			query := r.URL.Query()
 
+			useWrapper := wrapper.HasState(r.Context())
+
 			for _, rule := range rules {
 				value := query.Get(rule.Name)
 
 				if value == "" {
 					if rule.Required {
-						http.Error(w, fmt.Sprintf("Missing required query parameter: %s", rule.Name), http.StatusBadRequest)
+						if useWrapper {
+							wrapper.SetError(r, &wrapper.Error{
+								Type:    "validation_error",
+								Code:    "missing_parameter",
+								Message: fmt.Sprintf("Missing required query parameter: %s", rule.Name),
+								Param:   rule.Name,
+								Status:  http.StatusBadRequest,
+							})
+						} else {
+							http.Error(w, fmt.Sprintf("Missing required query parameter: %s", rule.Name), http.StatusBadRequest)
+						}
 						return
 					}
 					if rule.Default != "" {
@@ -169,7 +183,17 @@ func QueryParams(rules ...QueryParamConfig) func(http.Handler) http.Handler {
 
 				if rule.Validator != nil {
 					if err := rule.Validator(value); err != nil {
-						http.Error(w, fmt.Sprintf("Invalid query parameter %s: %v", rule.Name, err), http.StatusBadRequest)
+						if useWrapper {
+							wrapper.SetError(r, &wrapper.Error{
+								Type:    "validation_error",
+								Code:    "invalid_parameter",
+								Message: fmt.Sprintf("Invalid query parameter %s: %v", rule.Name, err),
+								Param:   rule.Name,
+								Status:  http.StatusBadRequest,
+							})
+						} else {
+							http.Error(w, fmt.Sprintf("Invalid query parameter %s: %v", rule.Name, err), http.StatusBadRequest)
+						}
 						return
 					}
 				}
@@ -248,12 +272,24 @@ type HeaderConfig struct {
 func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			useWrapper := wrapper.HasState(r.Context())
+
 			for _, rule := range rules {
 				value := r.Header.Get(rule.Name)
 
 				if value == "" {
 					if rule.Required {
-						http.Error(w, fmt.Sprintf("Missing required header: %s", rule.Name), http.StatusBadRequest)
+						if useWrapper {
+							wrapper.SetError(r, &wrapper.Error{
+								Type:    "validation_error",
+								Code:    "missing_header",
+								Message: fmt.Sprintf("Missing required header: %s", rule.Name),
+								Param:   rule.Name,
+								Status:  http.StatusBadRequest,
+							})
+						} else {
+							http.Error(w, fmt.Sprintf("Missing required header: %s", rule.Name), http.StatusBadRequest)
+						}
 						return
 					}
 					continue
@@ -277,7 +313,17 @@ func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
 						}
 					}
 					if !allowed {
-						http.Error(w, fmt.Sprintf("Header %s value not in allowed list", rule.Name), http.StatusForbidden)
+						if useWrapper {
+							wrapper.SetError(r, &wrapper.Error{
+								Type:    "validation_error",
+								Code:    "invalid_header",
+								Message: fmt.Sprintf("Header %s value not in allowed list", rule.Name),
+								Param:   rule.Name,
+								Status:  http.StatusForbidden,
+							})
+						} else {
+							http.Error(w, fmt.Sprintf("Header %s value not in allowed list", rule.Name), http.StatusForbidden)
+						}
 						return
 					}
 				}
@@ -289,7 +335,17 @@ func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
 							compareVal = strings.ToLower(d)
 						}
 						if checkValue == compareVal {
-							http.Error(w, fmt.Sprintf("Header %s value is denied", rule.Name), http.StatusForbidden)
+							if useWrapper {
+								wrapper.SetError(r, &wrapper.Error{
+									Type:    "validation_error",
+									Code:    "invalid_header",
+									Message: fmt.Sprintf("Header %s value is denied", rule.Name),
+									Param:   rule.Name,
+									Status:  http.StatusForbidden,
+								})
+							} else {
+								http.Error(w, fmt.Sprintf("Header %s value is denied", rule.Name), http.StatusForbidden)
+							}
 							return
 						}
 					}
