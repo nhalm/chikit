@@ -698,7 +698,7 @@ func TestRateLimit_WithWrapper_Headers(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
