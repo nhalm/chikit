@@ -14,7 +14,6 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
-- **Error Sanitization**: Strip sensitive information from error responses
 - **Authentication**: API key and bearer token validation with custom validators
 - **SLO Tracking**: Callback-based metrics for latency, traffic, and errors
 - **Zero Config Files**: Pure code configuration - no config files or environment variables
@@ -414,31 +413,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## Error Sanitization
-
-Strip sensitive information from error responses to prevent information leakage:
-
-```go
-import "github.com/nhalm/chikit/sanitize"
-
-// Default: strips stack traces and file paths from 4xx/5xx responses
-r.Use(sanitize.New())
-
-// Custom configuration
-r.Use(sanitize.New(
-    sanitize.WithStackTraces(true),  // Strip stack traces (default: true)
-    sanitize.WithFilePaths(true),    // Strip file paths (default: true)
-    sanitize.WithReplacementMessage("An error occurred"),
-))
-```
-
-The sanitizer automatically:
-- Buffers error responses (4xx/5xx status codes)
-- Removes stack traces (goroutine info, line numbers)
-- Strips file paths (Unix and Windows formats)
-- Preserves user-facing error messages
-- Returns replacement message if all content stripped
-
 ## Request Validation
 
 ### Body Size Limits
@@ -783,7 +757,6 @@ import (
     "context"
     "log"
     "net/http"
-    "strconv"
     "time"
 
     "github.com/go-chi/chi/v5"
@@ -793,9 +766,9 @@ import (
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
-    "github.com/nhalm/chikit/sanitize"
     "github.com/nhalm/chikit/slo"
     "github.com/nhalm/chikit/validate"
+    "github.com/nhalm/chikit/wrapper"
 )
 
 func main() {
@@ -805,10 +778,10 @@ func main() {
     r.Use(middleware.RequestID)
     r.Use(middleware.RealIP)
     r.Use(middleware.Logger)
-    r.Use(middleware.Recoverer)
 
-    // Sanitize errors to prevent information leakage
-    r.Use(sanitize.New())
+    // Response wrapper - must be outermost (after standard middleware)
+    // Provides structured JSON responses, panic recovery, and error sanitization
+    r.Use(wrapper.Handler())
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
