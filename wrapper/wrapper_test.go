@@ -7,6 +7,10 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/nhalm/canonlog"
+	"github.com/nhalm/chikit/slo"
 )
 
 func TestHandler_SuccessResponse(t *testing.T) {
@@ -482,5 +486,167 @@ func TestHandler_ConcurrentMixedOperations(t *testing.T) {
 
 	if rec.Code == 0 {
 		t.Error("expected non-zero status code")
+	}
+}
+
+func TestWithCanonlog_CreatesLogger(t *testing.T) {
+	var loggerFound bool
+
+	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, loggerFound = canonlog.TryGetLogger(r.Context())
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if !loggerFound {
+		t.Error("expected canonlog logger to be in context")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestWithCanonlog_Disabled(t *testing.T) {
+	var loggerFound bool
+
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, loggerFound = canonlog.TryGetLogger(r.Context())
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if loggerFound {
+		t.Error("expected canonlog logger to not be in context when disabled")
+	}
+}
+
+func TestWithCanonlogFields_AddsCustomFields(t *testing.T) {
+	var capturedRequestID string
+
+	handler := New(
+		WithCanonlog(),
+		WithCanonlogFields(func(r *http.Request) map[string]any {
+			return map[string]any{
+				"request_id": r.Header.Get("X-Request-ID"),
+			}
+		}),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		logger, _ := canonlog.TryGetLogger(r.Context())
+		if logger != nil {
+			capturedRequestID = r.Header.Get("X-Request-ID")
+		}
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.Header.Set("X-Request-ID", "test-123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if capturedRequestID != "test-123" {
+		t.Errorf("expected request_id 'test-123', got %s", capturedRequestID)
+	}
+}
+
+func TestWithSLOs_LogsSLOStatus(t *testing.T) {
+	handler := New(
+		WithCanonlog(),
+		WithSLOs(),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	r := chi.NewRouter()
+	r.With(slo.Track(slo.HighFast)).Get("/test", handler.ServeHTTP)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestWithSLOs_NoSLOOnRoute(t *testing.T) {
+	handler := New(
+		WithCanonlog(),
+		WithSLOs(),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		tier, _, found := slo.GetTier(r.Context())
+		if found {
+			t.Errorf("expected no SLO tier, got %s", tier)
+		}
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestWithSLOs_DisabledWithoutWithCanonlog(t *testing.T) {
+	handler := New(
+		WithSLOs(),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	r := chi.NewRouter()
+	r.With(slo.Track(slo.HighFast)).Get("/test", handler.ServeHTTP)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestWithCanonlog_ErrorLogging(t *testing.T) {
+	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		SetError(r, ErrNotFound.With("User not found"))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestWithCanonlog_PanicLogging(t *testing.T) {
+	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("test panic")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 }
