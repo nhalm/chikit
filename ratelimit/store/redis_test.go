@@ -684,8 +684,10 @@ func TestRedis_Increment_NegativeTTL(t *testing.T) {
 		t.Errorf("Increment() count = %v, want 6", count)
 	}
 
-	if ttl < -2 {
-		t.Errorf("Increment() ttl = %v, should be -1 or -2 for key without expiry", ttl)
+	// Redis returns -1 for keys without expiry, -2 for non-existent keys
+	// Our Lua script returns TTL in seconds, so -1s or -2s is expected
+	if ttl < -2*time.Second {
+		t.Errorf("Increment() ttl = %v, should be >= -2s for key without expiry", ttl)
 	}
 }
 
