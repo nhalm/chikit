@@ -56,124 +56,6 @@ func TestMaxBodySize_ExceedsLimit(t *testing.T) {
 	}
 }
 
-func TestQueryParams_Required(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?user=123", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("user", validate.WithRequired()),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
-func TestQueryParams_MissingRequired(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("user", validate.WithRequired()),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Missing required query parameter: user") {
-		t.Error("should return error message for missing required param")
-	}
-}
-
-func TestQueryParams_WithDefault(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("10"))
-	})
-
-	req := httptest.NewRequest("GET", "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("limit", validate.WithDefault("10")),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Body.String() != "10" {
-		t.Errorf("expected default value '10', got '%s'", rec.Body.String())
-	}
-}
-
-func TestQueryParams_WithValidator(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?age=25", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("age", validate.WithValidator(validate.OneOf("18", "21", "25"))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
-func TestQueryParams_ValidatorFails(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?age=30", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("age", validate.WithValidator(validate.OneOf("18", "21", "25"))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
-	}
-}
-
-func TestQueryParams_MultipleValues(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		values := r.URL.Query()["tags"]
-		if len(values) == 2 && values[0] == "a" && values[1] == "b" {
-			w.Write([]byte("ok"))
-		} else {
-			w.WriteHeader(http.StatusBadRequest)
-		}
-	})
-
-	req := httptest.NewRequest("GET", "/?tags=a&tags=b", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams()
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-
-	if rec.Body.String() != "ok" {
-		t.Error("multiple query param values should be preserved")
-	}
-}
-
 func TestHeaders_Required(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
@@ -183,8 +65,8 @@ func TestHeaders_Required(t *testing.T) {
 	req.Header.Set("X-API-Key", "secret")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-API-Key", validate.WithRequiredHeader()),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-API-Key", validate.WithRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -201,8 +83,8 @@ func TestHeaders_MissingRequired(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-API-Key", validate.WithRequiredHeader()),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-API-Key", validate.WithRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -223,8 +105,8 @@ func TestHeaders_AllowList(t *testing.T) {
 	req.Header.Set("X-Environment", "production")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -242,13 +124,13 @@ func TestHeaders_AllowListFails(t *testing.T) {
 	req.Header.Set("X-Environment", "development")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected status 403, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "not in allowed list") {
 		t.Error("should return error message for disallowed value")
@@ -264,8 +146,8 @@ func TestHeaders_DenyList(t *testing.T) {
 	req.Header.Set("X-Source", "api")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-Source", validate.WithDenyList("blocked", "banned")),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-Source", validate.WithDenyList("blocked", "banned")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -283,161 +165,158 @@ func TestHeaders_DenyListFails(t *testing.T) {
 	req.Header.Set("X-Source", "blocked")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.Headers(
-		validate.Header("X-Source", validate.WithDenyList("blocked", "banned")),
+	middleware := validate.NewHeaders(
+		validate.WithHeader("X-Source", validate.WithDenyList("blocked", "banned")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected status 403, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "is denied") {
 		t.Error("should return error message for denied value")
 	}
 }
 
-func TestPattern_ValidRegex(t *testing.T) {
+func TestHeaders_CaseSensitive_AllowList(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	req := httptest.NewRequest("GET", "/?email=test@example.com", http.NoBody)
-	rec := httptest.NewRecorder()
+	tests := []struct {
+		name           string
+		headerValue    string
+		allowList      []string
+		caseSensitive  bool
+		expectedStatus int
+		description    string
+	}{
+		{
+			name:           "case_insensitive_matches_different_case",
+			headerValue:    "Application/JSON",
+			allowList:      []string{"application/json"},
+			caseSensitive:  false,
+			expectedStatus: http.StatusOK,
+			description:    "without WithCaseSensitive, different cases should match",
+		},
+		{
+			name:           "case_sensitive_rejects_different_case",
+			headerValue:    "Application/JSON",
+			allowList:      []string{"application/json"},
+			caseSensitive:  true,
+			expectedStatus: http.StatusBadRequest,
+			description:    "with WithCaseSensitive, different cases should not match",
+		},
+		{
+			name:           "case_sensitive_accepts_exact_match",
+			headerValue:    "application/json",
+			allowList:      []string{"application/json"},
+			caseSensitive:  true,
+			expectedStatus: http.StatusOK,
+			description:    "with WithCaseSensitive, exact case should match",
+		},
+		{
+			name:           "case_insensitive_all_lowercase",
+			headerValue:    "application/json",
+			allowList:      []string{"APPLICATION/JSON"},
+			caseSensitive:  false,
+			expectedStatus: http.StatusOK,
+			description:    "case insensitive should match regardless of list case",
+		},
+	}
 
-	middleware := validate.QueryParams(
-		validate.Param("email", validate.WithValidator(validate.Pattern(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", http.NoBody)
+			req.Header.Set("Content-Type", tt.headerValue)
+			rec := httptest.NewRecorder()
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
+			var opts []validate.HeaderOption
+			opts = append(opts, validate.WithAllowList(tt.allowList...))
+			if tt.caseSensitive {
+				opts = append(opts, validate.WithCaseSensitive())
+			}
+
+			middleware := validate.NewHeaders(
+				validate.WithHeader("Content-Type", opts...),
+			)
+			middleware(handler).ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("%s: expected status %d, got %d", tt.description, tt.expectedStatus, rec.Code)
+			}
+		})
 	}
 }
 
-func TestPattern_InvalidRegex(t *testing.T) {
+func TestHeaders_CaseSensitive_DenyList(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	req := httptest.NewRequest("GET", "/?email=invalid-email", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("email", validate.WithValidator(validate.Pattern(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "must match pattern") {
-		t.Errorf("should return error message for pattern mismatch, got: %s", rec.Body.String())
-	}
-}
-
-func TestPattern_NumericPattern(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?id=12345", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("id", validate.WithValidator(validate.Pattern(`^\d+$`))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
-func TestPattern_NumericPatternFails(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?id=abc123", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	middleware := validate.QueryParams(
-		validate.Param("id", validate.WithValidator(validate.Pattern(`^\d+$`))),
-	)
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
-	}
-}
-
-func TestQueryParams_WithWrapper_MissingRequired(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	chain := wrapper.Handler()(validate.QueryParams(
-		validate.Param("user", validate.WithRequired()),
-	)(handler))
-	chain.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
+	tests := []struct {
+		name           string
+		headerValue    string
+		denyList       []string
+		caseSensitive  bool
+		expectedStatus int
+		description    string
+	}{
+		{
+			name:           "case_insensitive_blocks_different_case",
+			headerValue:    "BLOCKED",
+			denyList:       []string{"blocked"},
+			caseSensitive:  false,
+			expectedStatus: http.StatusBadRequest,
+			description:    "without WithCaseSensitive, different cases should be blocked",
+		},
+		{
+			name:           "case_sensitive_allows_different_case",
+			headerValue:    "BLOCKED",
+			denyList:       []string{"blocked"},
+			caseSensitive:  true,
+			expectedStatus: http.StatusOK,
+			description:    "with WithCaseSensitive, different cases should not match deny list",
+		},
+		{
+			name:           "case_sensitive_blocks_exact_match",
+			headerValue:    "blocked",
+			denyList:       []string{"blocked"},
+			caseSensitive:  true,
+			expectedStatus: http.StatusBadRequest,
+			description:    "with WithCaseSensitive, exact case should be blocked",
+		},
+		{
+			name:           "case_insensitive_any_case_blocked",
+			headerValue:    "BlOcKeD",
+			denyList:       []string{"BLOCKED"},
+			caseSensitive:  false,
+			expectedStatus: http.StatusBadRequest,
+			description:    "case insensitive should block regardless of case variations",
+		},
 	}
 
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", ct)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", http.NoBody)
+			req.Header.Set("X-Source", tt.headerValue)
+			rec := httptest.NewRecorder()
 
-	var resp map[string]wrapper.Error
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
+			var opts []validate.HeaderOption
+			opts = append(opts, validate.WithDenyList(tt.denyList...))
+			if tt.caseSensitive {
+				opts = append(opts, validate.WithCaseSensitive())
+			}
 
-	if resp["error"].Type != "validation_error" {
-		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
-	}
-	if resp["error"].Code != "missing_parameter" {
-		t.Errorf("expected code missing_parameter, got %s", resp["error"].Code)
-	}
-	if resp["error"].Param != "user" {
-		t.Errorf("expected param 'user', got %s", resp["error"].Param)
-	}
-}
+			middleware := validate.NewHeaders(
+				validate.WithHeader("X-Source", opts...),
+			)
+			middleware(handler).ServeHTTP(rec, req)
 
-func TestQueryParams_WithWrapper_InvalidValue(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	req := httptest.NewRequest("GET", "/?age=invalid", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	chain := wrapper.Handler()(validate.QueryParams(
-		validate.Param("age", validate.WithValidator(validate.OneOf("18", "21", "25"))),
-	)(handler))
-	chain.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", rec.Code)
-	}
-
-	var resp map[string]wrapper.Error
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if resp["error"].Type != "validation_error" {
-		t.Errorf("expected error type validation_error, got %s", resp["error"].Type)
-	}
-	if resp["error"].Code != "invalid_parameter" {
-		t.Errorf("expected code invalid_parameter, got %s", resp["error"].Code)
-	}
-	if resp["error"].Param != "age" {
-		t.Errorf("expected param 'age', got %s", resp["error"].Param)
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("%s: expected status %d, got %d", tt.description, tt.expectedStatus, rec.Code)
+			}
+		})
 	}
 }
 
@@ -449,8 +328,8 @@ func TestHeaders_WithWrapper_MissingRequired(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(validate.Headers(
-		validate.Header("X-API-Key", validate.WithRequiredHeader()),
+	chain := wrapper.New()(validate.NewHeaders(
+		validate.WithHeader("X-API-Key", validate.WithRequired()),
 	)(handler))
 	chain.ServeHTTP(rec, req)
 
@@ -483,13 +362,13 @@ func TestHeaders_WithWrapper_NotInAllowList(t *testing.T) {
 	req.Header.Set("X-Environment", "development")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(validate.Headers(
-		validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
+	chain := wrapper.New()(validate.NewHeaders(
+		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
 	)(handler))
 	chain.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected status 403, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 
 	var resp map[string]wrapper.Error

@@ -10,7 +10,7 @@
 // Basic usage:
 //
 //	r := chi.NewRouter()
-//	r.Use(wrapper.Handler())  // Outermost middleware
+//	r.Use(wrapper.New())  // Outermost middleware
 //
 //	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
 //	    user, err := createUser(req)
@@ -23,6 +23,7 @@
 package wrapper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -54,9 +55,17 @@ type Error struct {
 
 // FieldError represents a validation error for a specific field.
 type FieldError struct {
-	Field   string `json:"field"`
+	Param   string `json:"param"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+type errorResponse struct {
+	Error *Error `json:"error"`
+}
+
+var bufferPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
 }
 
 // Error implements the error interface.
@@ -66,6 +75,9 @@ func (e *Error) Error() string {
 
 // Is implements errors.Is for comparing error types.
 func (e *Error) Is(target error) bool {
+	if e == nil {
+		return target == nil
+	}
 	t, ok := target.(*Error)
 	if !ok {
 		return false
@@ -75,6 +87,9 @@ func (e *Error) Is(target error) bool {
 
 // With returns a copy of the error with a custom message.
 func (e *Error) With(message string) *Error {
+	if e == nil {
+		return nil
+	}
 	dup := *e
 	dup.Message = message
 	return &dup
@@ -82,6 +97,9 @@ func (e *Error) With(message string) *Error {
 
 // WithParam returns a copy of the error with a custom message and parameter.
 func (e *Error) WithParam(message, param string) *Error {
+	if e == nil {
+		return nil
+	}
 	dup := *e
 	dup.Message = message
 	dup.Param = param
@@ -118,6 +136,8 @@ func NewValidationError(errors []FieldError) *Error {
 }
 
 // SetError sets an error response in the request context.
+// If wrapper middleware is not present (state is nil), this is a no-op.
+// Use HasState() to check if wrapper middleware is active.
 func SetError(r *http.Request, err *Error) {
 	state := getState(r.Context())
 	if state == nil {
@@ -129,6 +149,8 @@ func SetError(r *http.Request, err *Error) {
 }
 
 // SetResponse sets a success response in the request context.
+// If wrapper middleware is not present (state is nil), this is a no-op.
+// Use HasState() to check if wrapper middleware is active.
 func SetResponse(r *http.Request, status int, body any) {
 	state := getState(r.Context())
 	if state == nil {
@@ -141,6 +163,8 @@ func SetResponse(r *http.Request, status int, body any) {
 }
 
 // SetHeader sets a response header in the request context.
+// If wrapper middleware is not present (state is nil), this is a no-op.
+// Use HasState() to check if wrapper middleware is active.
 func SetHeader(r *http.Request, key, value string) {
 	state := getState(r.Context())
 	if state == nil {
@@ -155,6 +179,8 @@ func SetHeader(r *http.Request, key, value string) {
 }
 
 // AddHeader adds a response header value in the request context.
+// If wrapper middleware is not present (state is nil), this is a no-op.
+// Use HasState() to check if wrapper middleware is active.
 func AddHeader(r *http.Request, key, value string) {
 	state := getState(r.Context())
 	if state == nil {
@@ -178,8 +204,20 @@ func getState(ctx context.Context) *State {
 	return state
 }
 
-// Handler returns middleware that manages response state and writes responses.
-func Handler() func(http.Handler) http.Handler {
+// Option configures the wrapper middleware.
+type Option func(*config)
+
+// config holds configuration for the wrapper middleware.
+// Currently empty but supports future options without breaking changes.
+type config struct{}
+
+// New returns middleware that manages response state and writes responses.
+func New(opts ...Option) func(http.Handler) http.Handler {
+	cfg := &config{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			state := &State{}
@@ -211,16 +249,36 @@ func writeResponse(w http.ResponseWriter, state *State) {
 	}
 
 	if state.err != nil {
+		buf := bufferPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		defer bufferPool.Put(buf)
+
+		if err := json.NewEncoder(buf).Encode(errorResponse{Error: state.err}); err != nil {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("Internal server error"))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(state.err.Status)
-		json.NewEncoder(w).Encode(map[string]*Error{"error": state.err})
+		w.Write(buf.Bytes())
 		return
 	}
 
 	if state.body != nil {
+		buf := bufferPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		defer bufferPool.Put(buf)
+
+		if err := json.NewEncoder(buf).Encode(state.body); err != nil {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("Internal server error"))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(state.status)
-		json.NewEncoder(w).Encode(state.body)
+		w.Write(buf.Bytes())
 		return
 	}
 

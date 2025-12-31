@@ -1,0 +1,718 @@
+package bind_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/nhalm/chikit/bind"
+	"github.com/nhalm/chikit/wrapper"
+)
+
+type CreateUserRequest struct {
+	Email string `json:"email" validate:"required,email"`
+	Age   int    `json:"age" validate:"min=18"`
+}
+
+type ListUsersRequest struct {
+	Page   int    `query:"page" validate:"omitempty,min=1"`
+	Limit  int    `query:"limit" validate:"omitempty,min=1,max=100"`
+	Status string `query:"status" validate:"omitempty,oneof=active inactive"`
+}
+
+func TestJSON_ValidInput(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"email": "test@example.com", "age": 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp CreateUserRequest
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Email != "test@example.com" {
+		t.Errorf("expected email test@example.com, got %s", resp.Email)
+	}
+	if resp.Age != 25 {
+		t.Errorf("expected age 25, got %d", resp.Age)
+	}
+}
+
+func TestJSON_MalformedJSON(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"email": "test@example.com", age: 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Type != "request_error" {
+		t.Errorf("expected error type request_error, got %s", resp["error"].Type)
+	}
+	if resp["error"].Message != "Invalid JSON request body" {
+		t.Errorf("expected message 'Invalid JSON request body', got %s", resp["error"].Message)
+	}
+}
+
+func TestJSON_ValidationFailure(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"email": "invalid-email", "age": 15}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Error struct {
+			Type    string               `json:"type"`
+			Code    string               `json:"code"`
+			Message string               `json:"message"`
+			Errors  []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Error.Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp.Error.Type)
+	}
+	if len(resp.Error.Errors) != 2 {
+		t.Errorf("expected 2 field errors, got %d", len(resp.Error.Errors))
+	}
+}
+
+func TestJSON_MissingRequired(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"age": 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Error struct {
+			Errors []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(resp.Error.Errors) != 1 {
+		t.Fatalf("expected 1 field error, got %d", len(resp.Error.Errors))
+	}
+	if resp.Error.Errors[0].Param != "email" {
+		t.Errorf("expected param 'email', got %s", resp.Error.Errors[0].Param)
+	}
+	if resp.Error.Errors[0].Code != "required" {
+		t.Errorf("expected code 'required', got %s", resp.Error.Errors[0].Code)
+	}
+}
+
+func TestQuery_ValidInput(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=2&limit=50&status=active", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp ListUsersRequest
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Page != 2 {
+		t.Errorf("expected page 2, got %d", resp.Page)
+	}
+	if resp.Limit != 50 {
+		t.Errorf("expected limit 50, got %d", resp.Limit)
+	}
+	if resp.Status != "active" {
+		t.Errorf("expected status 'active', got %s", resp.Status)
+	}
+}
+
+func TestQuery_OptionalParams(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestQuery_ValidationFailure(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=-1&limit=200&status=unknown", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Error struct {
+			Type   string               `json:"type"`
+			Errors []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Error.Type != "validation_error" {
+		t.Errorf("expected error type validation_error, got %s", resp.Error.Type)
+	}
+	if len(resp.Error.Errors) != 3 {
+		t.Errorf("expected 3 field errors, got %d", len(resp.Error.Errors))
+	}
+}
+
+func TestQuery_TypeConversionError(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=notanumber", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Message != "Invalid query parameters" {
+		t.Errorf("expected message 'Invalid query parameters', got %s", resp["error"].Message)
+	}
+}
+
+func TestCustomFormatter(t *testing.T) {
+	customFormatter := func(field, tag, _ string) string {
+		return "CUSTOM:" + field + ":" + tag
+	}
+
+	handler := wrapper.New()(bind.New(bind.WithFormatter(customFormatter))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"age": 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var resp struct {
+		Error struct {
+			Errors []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Error.Errors[0].Message != "CUSTOM:email:required" {
+		t.Errorf("expected custom message 'CUSTOM:email:required', got %s", resp.Error.Errors[0].Message)
+	}
+}
+
+func TestDefaultFormatterWithoutMiddleware(t *testing.T) {
+	handler := wrapper.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	}))
+
+	body := `{"age": 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var resp struct {
+		Error struct {
+			Errors []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Error.Errors[0].Message != "required" {
+		t.Errorf("expected default message 'required', got %s", resp.Error.Errors[0].Message)
+	}
+}
+
+func TestStandaloneMode_JSON(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	body := `{"email": "invalid"}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestStandaloneMode_Query(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, &req) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/?page=-1", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestRegisterValidation(t *testing.T) {
+	err := bind.RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
+		return fl.Field().String() == "valid"
+	})
+	if err != nil {
+		t.Fatalf("failed to register validation: %v", err)
+	}
+
+	type CustomRequest struct {
+		Value string `json:"value" validate:"customtag"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CustomRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"value": "valid"}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	body = `{"value": "invalid"}`
+	req = httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec = httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestQuery_BoolField(t *testing.T) {
+	type BoolRequest struct {
+		Active bool `query:"active"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req BoolRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?active=true", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp BoolRequest
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !resp.Active {
+		t.Error("expected active to be true")
+	}
+}
+
+func TestQuery_FloatField(t *testing.T) {
+	type FloatRequest struct {
+		Price float64 `query:"price"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req FloatRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?price=19.99", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp FloatRequest
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Price != 19.99 {
+		t.Errorf("expected price 19.99, got %f", resp.Price)
+	}
+}
+
+func TestQuery_UintField(t *testing.T) {
+	type UintRequest struct {
+		Count uint `query:"count"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req UintRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?count=42", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp UintRequest
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Count != 42 {
+		t.Errorf("expected count 42, got %d", resp.Count)
+	}
+}
+
+func TestJSON_EmptyBody(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader(""))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestDefaultFormatter_AllTags(t *testing.T) {
+	type AllTagsRequest struct {
+		Email  string `json:"email" validate:"email"`
+		Age    int    `json:"age" validate:"min=18"`
+		Count  int    `json:"count" validate:"max=100"`
+		Status string `json:"status" validate:"oneof=a b c"`
+		ID     string `json:"id" validate:"uuid"`
+		URL    string `json:"url" validate:"url"`
+		NoOp   string `json:"noop" validate:"alpha"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req AllTagsRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	body := `{"email": "x", "age": 1, "count": 200, "status": "x", "id": "x", "url": "x", "noop": "123"}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var resp struct {
+		Error struct {
+			Errors []wrapper.FieldError `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	messages := make(map[string]string)
+	for _, e := range resp.Error.Errors {
+		messages[e.Param] = e.Message
+	}
+
+	if messages["email"] != "must be a valid email" {
+		t.Errorf("expected email message 'must be a valid email', got %s", messages["email"])
+	}
+	if messages["age"] != "must be at least 18" {
+		t.Errorf("expected age message 'must be at least 18', got %s", messages["age"])
+	}
+	if messages["count"] != "must be at most 100" {
+		t.Errorf("expected count message 'must be at most 100', got %s", messages["count"])
+	}
+	if messages["status"] != "must be one of: a b c" {
+		t.Errorf("expected status message 'must be one of: a b c', got %s", messages["status"])
+	}
+	if messages["id"] != "must be a valid UUID" {
+		t.Errorf("expected id message 'must be a valid UUID', got %s", messages["id"])
+	}
+	if messages["url"] != "must be a valid URL" {
+		t.Errorf("expected url message 'must be a valid URL', got %s", messages["url"])
+	}
+	if messages["noop"] != "alpha" {
+		t.Errorf("expected noop message 'alpha', got %s", messages["noop"])
+	}
+}
+
+func TestQuery_NilPointer(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req *ListUsersRequest
+		if !bind.Query(r, req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for nil pointer, got %d", rec.Code)
+	}
+}
+
+func TestQuery_NonPointer(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req ListUsersRequest
+		if !bind.Query(r, req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for non-pointer, got %d", rec.Code)
+	}
+}
+
+func TestQuery_PointerToNonStruct(t *testing.T) {
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var s string
+		if !bind.Query(r, &s) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, s)
+	})))
+
+	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for pointer to non-struct, got %d", rec.Code)
+	}
+}
+
+func TestQuery_IntegerOverflow(t *testing.T) {
+	type SmallIntRequest struct {
+		Count int8 `query:"count"`
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req SmallIntRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	})))
+
+	req := httptest.NewRequest("GET", "/?count=1000", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for integer overflow, got %d", rec.Code)
+	}
+}
+
+func TestQuery_UnexportedField(t *testing.T) {
+	type MixedRequest struct {
+		Public  int `query:"public"`
+		private int `query:"private"` //nolint:unused
+	}
+
+	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var req MixedRequest
+		if !bind.Query(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, map[string]int{"public": req.Public})
+	})))
+
+	req := httptest.NewRequest("GET", "/?public=42&private=99", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["public"] != 42 {
+		t.Errorf("expected public=42, got %d", resp["public"])
+	}
+}

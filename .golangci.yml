@@ -29,6 +29,7 @@ linters:
         - unlambda
         - whyNoLint
         - unnamedResult
+        - hugeParam
     revive:
       rules:
         - name: blank-imports

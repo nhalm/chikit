@@ -356,7 +356,7 @@ func TestAPIKey_WithWrapper_MissingKey(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(auth.APIKey(validator)(handler))
+	chain := wrapper.New()(auth.APIKey(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -393,7 +393,7 @@ func TestAPIKey_WithWrapper_InvalidKey(t *testing.T) {
 	req.Header.Set("X-API-Key", "invalid-key")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(auth.APIKey(validator)(handler))
+	chain := wrapper.New()(auth.APIKey(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -422,7 +422,7 @@ func TestBearerToken_WithWrapper_Missing(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain := wrapper.New()(auth.BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -455,7 +455,7 @@ func TestBearerToken_WithWrapper_InvalidFormat(t *testing.T) {
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain := wrapper.New()(auth.BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -485,7 +485,7 @@ func TestBearerToken_WithWrapper_InvalidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.Handler()(auth.BearerToken(validator)(handler))
+	chain := wrapper.New()(auth.BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {

@@ -657,7 +657,7 @@ func TestRateLimit_WithWrapper_Exceeded(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	chain := wrapper.Handler()(ratelimit.ByIP(st, 2, time.Minute)(handler))
+	chain := wrapper.New()(ratelimit.ByIP(st, 2, time.Minute)(handler))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -702,7 +702,7 @@ func TestRateLimit_WithWrapper_Headers(t *testing.T) {
 		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	chain := wrapper.Handler()(ratelimit.ByIP(st, 5, time.Minute)(handler))
+	chain := wrapper.New()(ratelimit.ByIP(st, 5, time.Minute)(handler))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -734,7 +734,7 @@ func TestRateLimit_WithWrapper_StoreError(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	chain := wrapper.Handler()(ratelimit.ByIP(st, 10, time.Minute)(handler))
+	chain := wrapper.New()(ratelimit.ByIP(st, 10, time.Minute)(handler))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"

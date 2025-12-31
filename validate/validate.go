@@ -1,21 +1,14 @@
 // Package validate provides middleware for request validation.
 //
-// The package offers validation for query parameters, headers, and request body size.
+// The package offers validation for headers and request body size.
 // All validation middleware returns 400 (Bad Request) for validation failures.
 // MaxBodySize wraps the request body with http.MaxBytesReader; downstream handlers
 // must check for errors when reading the body to detect size limit violations.
 //
-// Query parameter validation:
-//
-//	r.Use(validate.QueryParams(
-//		validate.Param("page", validate.WithRequired(), validate.WithValidator(validate.Pattern(`^\d+$`))),
-//		validate.Param("limit", validate.WithDefault("10")),
-//	))
-//
 // Header validation:
 //
-//	r.Use(validate.Headers(
-//		validate.Header("Content-Type", validate.WithRequiredHeader(), validate.WithAllowList("application/json")),
+//	r.Use(validate.NewHeaders(
+//		validate.WithHeader("Content-Type", validate.WithRequired(), validate.WithAllowList("application/json")),
 //	))
 //
 // Body size limiting:
@@ -26,47 +19,37 @@ package validate
 import (
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/nhalm/chikit/wrapper"
 )
 
-// MaxBodySizeConfig configures the MaxBodySize middleware.
-type MaxBodySizeConfig struct {
-	// MaxBytes is the maximum allowed request body size in bytes
-	MaxBytes int64
-
-	// StatusCode is the HTTP status code to return when limit is exceeded (default: 413)
-	StatusCode int
-
-	// Message is the error message to return when limit is exceeded
-	Message string
+// bodySizeConfig holds configuration for MaxBodySize middleware.
+type bodySizeConfig struct {
+	maxBytes int64
 }
 
+// BodySizeOption configures MaxBodySize middleware.
+type BodySizeOption func(*bodySizeConfig)
+
 // MaxBodySize returns middleware that limits request body size using http.MaxBytesReader.
-// This middleware wraps the request body to prevent reading beyond the specified limit.
 //
-// IMPORTANT: This middleware only wraps the body - it does NOT automatically send error responses.
-// Downstream handlers must handle errors when reading the body. When the limit is exceeded,
-// the body reader will return an error of type *http.MaxBytesError. Your handler should check
-// for this error type and respond appropriately.
+// IMPORTANT: This middleware ONLY wraps the request body - it does NOT automatically
+// detect or return error responses. The body size limit is enforced only when the body
+// is read by your handler. Handlers MUST check for *http.MaxBytesError when reading
+// the body to properly handle size violations.
 //
-// The StatusCode and Message fields in MaxBodySizeConfig are provided for convenience but are
-// not used by this middleware itself. Downstream handlers should use these values when crafting
-// their error responses.
+// How it works:
+//  1. This middleware wraps r.Body with http.MaxBytesReader before calling the next handler
+//  2. The wrapped body reader tracks bytes read and returns an error if the limit is exceeded
+//  3. Your handler must read the body (e.g., via io.ReadAll or json.Decoder) to trigger the check
+//  4. Your handler must check for *http.MaxBytesError to detect size violations
 //
-// Example:
+// Basic usage:
 //
 //	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
 //
-// With custom status code and message:
-//
-//	r.Use(validate.MaxBodySize(1024,
-//		validate.WithBodySizeStatus(http.StatusBadRequest),
-//		validate.WithBodySizeMessage("Request too large")))
-//
-// Example handler that checks for body size errors:
+// Handler example with proper error handling:
 //
 //	func handler(w http.ResponseWriter, r *http.Request) {
 //		body, err := io.ReadAll(r.Body)
@@ -79,162 +62,54 @@ type MaxBodySizeConfig struct {
 //			http.Error(w, "Failed to read body", http.StatusInternalServerError)
 //			return
 //		}
-//		// ... process body
+//		// Process body...
 //	}
-func MaxBodySize(maxBytes int64, opts ...MaxBodySizeOption) func(http.Handler) http.Handler {
-	config := MaxBodySizeConfig{
-		MaxBytes:   maxBytes,
-		StatusCode: http.StatusRequestEntityTooLarge,
-		Message:    "Request body too large",
+//
+// With wrapper middleware (recommended):
+//
+//	func handler(w http.ResponseWriter, r *http.Request) {
+//		body, err := io.ReadAll(r.Body)
+//		if err != nil {
+//			var maxBytesErr *http.MaxBytesError
+//			if errors.As(err, &maxBytesErr) {
+//				wrapper.SetError(r, wrapper.ErrUnprocessableEntity.With("Request body exceeds maximum size"))
+//				return
+//			}
+//			wrapper.SetError(r, wrapper.ErrInternal.With("Failed to read request body"))
+//			return
+//		}
+//		// Process body...
+//	}
+//
+// With JSON decoding:
+//
+//	func handler(w http.ResponseWriter, r *http.Request) {
+//		var req MyRequest
+//		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+//			var maxBytesErr *http.MaxBytesError
+//			if errors.As(err, &maxBytesErr) {
+//				wrapper.SetError(r, wrapper.ErrUnprocessableEntity.With("Request body too large"))
+//				return
+//			}
+//			wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid JSON"))
+//			return
+//		}
+//		// Process req...
+//	}
+func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http.Handler {
+	cfg := &bodySizeConfig{
+		maxBytes: maxBytes,
 	}
-
 	for _, opt := range opts {
-		opt(&config)
+		opt(cfg)
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(w, r.Body, config.MaxBytes)
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.maxBytes)
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// MaxBodySizeOption configures MaxBodySize middleware.
-type MaxBodySizeOption func(*MaxBodySizeConfig)
-
-// WithBodySizeStatus sets the HTTP status code returned when body size is exceeded.
-func WithBodySizeStatus(code int) MaxBodySizeOption {
-	return func(c *MaxBodySizeConfig) {
-		c.StatusCode = code
-	}
-}
-
-// WithBodySizeMessage sets the error message returned when body size is exceeded.
-func WithBodySizeMessage(msg string) MaxBodySizeOption {
-	return func(c *MaxBodySizeConfig) {
-		c.Message = msg
-	}
-}
-
-// QueryParamConfig defines validation rules for a query parameter.
-type QueryParamConfig struct {
-	// Name is the query parameter name to validate
-	Name string
-
-	// Required indicates whether the parameter must be present
-	Required bool
-
-	// Validator is an optional custom validation function
-	Validator func(string) error
-
-	// Default is the value to use if the parameter is missing (only used when Required is false)
-	Default string
-}
-
-// QueryParams returns middleware that validates query parameters according to the given rules.
-// For each rule, checks if the parameter is present (when required), applies the validator
-// (if provided), and sets default values (when specified). Returns 400 (Bad Request) if
-// validation fails.
-//
-// IMPORTANT: This middleware modifies the request URL by setting default values for missing
-// parameters. The modified URL is available to downstream handlers via r.URL.Query().
-//
-// Note: When Required is true, the Default value has no effect since the parameter
-// must be present.
-//
-// Example:
-//
-//	r.Use(validate.QueryParams(
-//		validate.Param("page", validate.WithRequired(), validate.WithValidator(validate.Pattern(`^\d+$`))),
-//		validate.Param("limit", validate.WithDefault("10"), validate.WithValidator(validate.MinLength(1))),
-//		validate.Param("sort", validate.WithValidator(validate.OneOf("asc", "desc"))),
-//	))
-func QueryParams(rules ...QueryParamConfig) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			query := r.URL.Query()
-
-			useWrapper := wrapper.HasState(r.Context())
-
-			for _, rule := range rules {
-				value := query.Get(rule.Name)
-
-				if value == "" {
-					if rule.Required {
-						if useWrapper {
-							wrapper.SetError(r, &wrapper.Error{
-								Type:    "validation_error",
-								Code:    "missing_parameter",
-								Message: fmt.Sprintf("Missing required query parameter: %s", rule.Name),
-								Param:   rule.Name,
-								Status:  http.StatusBadRequest,
-							})
-						} else {
-							http.Error(w, fmt.Sprintf("Missing required query parameter: %s", rule.Name), http.StatusBadRequest)
-						}
-						return
-					}
-					if rule.Default != "" {
-						query.Set(rule.Name, rule.Default)
-					}
-					continue
-				}
-
-				if rule.Validator != nil {
-					if err := rule.Validator(value); err != nil {
-						if useWrapper {
-							wrapper.SetError(r, &wrapper.Error{
-								Type:    "validation_error",
-								Code:    "invalid_parameter",
-								Message: fmt.Sprintf("Invalid query parameter %s: %v", rule.Name, err),
-								Param:   rule.Name,
-								Status:  http.StatusBadRequest,
-							})
-						} else {
-							http.Error(w, fmt.Sprintf("Invalid query parameter %s: %v", rule.Name, err), http.StatusBadRequest)
-						}
-						return
-					}
-				}
-			}
-
-			r.URL.RawQuery = query.Encode()
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// WithRequired marks a query parameter as required.
-func WithRequired() func(*QueryParamConfig) {
-	return func(r *QueryParamConfig) {
-		r.Required = true
-	}
-}
-
-// WithDefault sets a default value for a query parameter.
-// The default is only applied when the parameter is missing and Required is false.
-func WithDefault(val string) func(*QueryParamConfig) {
-	return func(r *QueryParamConfig) {
-		r.Default = val
-	}
-}
-
-// WithValidator sets a validation function for a query parameter.
-// The validator receives the parameter value and should return an error if invalid.
-func WithValidator(fn func(string) error) func(*QueryParamConfig) {
-	return func(r *QueryParamConfig) {
-		r.Validator = fn
-	}
-}
-
-// Param creates a query parameter rule with the given name and options.
-func Param(name string, opts ...func(*QueryParamConfig)) QueryParamConfig {
-	rule := QueryParamConfig{Name: name}
-	for _, opt := range opts {
-		opt(&rule)
-	}
-	return rule
 }
 
 // HeaderConfig defines validation rules for a header.
@@ -255,27 +130,51 @@ type HeaderConfig struct {
 	CaseSensitive bool
 }
 
-// Headers returns middleware that validates request headers according to the given rules.
+// headersConfig holds the configuration for NewHeaders middleware.
+type headersConfig struct {
+	rules []HeaderConfig
+}
+
+// HeadersOption configures NewHeaders middleware.
+type HeadersOption func(*headersConfig)
+
+// WithHeader adds a header validation rule with the given name and options.
+func WithHeader(name string, opts ...HeaderOption) HeadersOption {
+	return func(cfg *headersConfig) {
+		rule := HeaderConfig{Name: name}
+		for _, opt := range opts {
+			opt(&rule)
+		}
+		cfg.rules = append(cfg.rules, rule)
+	}
+}
+
+// NewHeaders returns middleware that validates request headers according to the given rules.
 // For each rule, checks if the header is present (when required), validates against
 // allow/deny lists, and enforces case sensitivity settings. Returns 400 (Bad Request)
-// if a required header is missing, or 403 (Forbidden) if a value is not allowed or is denied.
+// for all validation failures.
 //
 // Example:
 //
-//	r.Use(validate.Headers(
-//		validate.Header("Content-Type",
-//			validate.WithRequiredHeader(),
+//	r.Use(validate.NewHeaders(
+//		validate.WithHeader("Content-Type",
+//			validate.WithRequired(),
 //			validate.WithAllowList("application/json", "application/xml")),
-//		validate.Header("X-Custom-Header",
+//		validate.WithHeader("X-Custom-Header",
 //			validate.WithDenyList("forbidden-value")),
 //	))
-func Headers(rules ...HeaderConfig) func(http.Handler) http.Handler {
+func NewHeaders(opts ...HeadersOption) func(http.Handler) http.Handler {
+	cfg := &headersConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			useWrapper := wrapper.HasState(r.Context())
 
-			for i := range rules {
-				if err := validateHeader(r, &rules[i]); err != nil {
+			for i := range cfg.rules {
+				if err := validateHeader(r, &cfg.rules[i]); err != nil {
 					if useWrapper {
 						wrapper.SetError(r, err)
 					} else {
@@ -338,7 +237,7 @@ func checkAllowList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 		Code:    "invalid_header",
 		Message: fmt.Sprintf("Header %s value not in allowed list", rule.Name),
 		Param:   rule.Name,
-		Status:  http.StatusForbidden,
+		Status:  http.StatusBadRequest,
 	}
 }
 
@@ -358,7 +257,7 @@ func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 				Code:    "invalid_header",
 				Message: fmt.Sprintf("Header %s value is denied", rule.Name),
 				Param:   rule.Name,
-				Status:  http.StatusForbidden,
+				Status:  http.StatusBadRequest,
 			}
 		}
 	}
@@ -366,33 +265,27 @@ func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 	return nil
 }
 
-// Header creates a header validation rule with the given name and options.
-func Header(name string, opts ...func(*HeaderConfig)) HeaderConfig {
-	rule := HeaderConfig{Name: name}
-	for _, opt := range opts {
-		opt(&rule)
-	}
-	return rule
-}
+// HeaderOption configures a header validation rule.
+type HeaderOption func(*HeaderConfig)
 
-// WithRequiredHeader marks a header as required.
-func WithRequiredHeader() func(*HeaderConfig) {
+// WithRequired marks a header as required.
+func WithRequired() HeaderOption {
 	return func(r *HeaderConfig) {
 		r.Required = true
 	}
 }
 
 // WithAllowList sets the list of allowed values for a header.
-// If set, only values in this list are permitted. Returns 403 if the value is not in the list.
-func WithAllowList(values ...string) func(*HeaderConfig) {
+// If set, only values in this list are permitted. Returns 400 if the value is not in the list.
+func WithAllowList(values ...string) HeaderOption {
 	return func(r *HeaderConfig) {
 		r.AllowedList = values
 	}
 }
 
 // WithDenyList sets the list of denied values for a header.
-// If set, values in this list are explicitly forbidden. Returns 403 if the value is in the list.
-func WithDenyList(values ...string) func(*HeaderConfig) {
+// If set, values in this list are explicitly forbidden. Returns 400 if the value is in the list.
+func WithDenyList(values ...string) HeaderOption {
 	return func(r *HeaderConfig) {
 		r.DeniedList = values
 	}
@@ -400,53 +293,8 @@ func WithDenyList(values ...string) func(*HeaderConfig) {
 
 // WithCaseSensitive makes header value comparisons case-sensitive.
 // By default, comparisons are case-insensitive.
-func WithCaseSensitive() func(*HeaderConfig) {
+func WithCaseSensitive() HeaderOption {
 	return func(r *HeaderConfig) {
 		r.CaseSensitive = true
-	}
-}
-
-// OneOf is a validator that checks if a value is in a list of allowed values.
-func OneOf(values ...string) func(string) error {
-	return func(val string) error {
-		for _, v := range values {
-			if val == v {
-				return nil
-			}
-		}
-		return fmt.Errorf("must be one of: %s", strings.Join(values, ", "))
-	}
-}
-
-// MinLength is a validator that checks if a value has minimum length.
-func MinLength(minLen int) func(string) error {
-	return func(val string) error {
-		if len(val) < minLen {
-			return fmt.Errorf("must be at least %d characters", minLen)
-		}
-		return nil
-	}
-}
-
-// MaxLength is a validator that checks if a value has maximum length.
-func MaxLength(maxLen int) func(string) error {
-	return func(val string) error {
-		if len(val) > maxLen {
-			return fmt.Errorf("must be at most %d characters", maxLen)
-		}
-		return nil
-	}
-}
-
-// Pattern is a validator that checks if a value matches a regex pattern.
-// Note: Query parameter values from r.URL.Query() are already URL-decoded by Go's
-// query parser, so this validator works directly with the decoded values.
-func Pattern(pattern string) func(string) error {
-	re := regexp.MustCompile(pattern)
-	return func(val string) error {
-		if !re.MatchString(val) {
-			return fmt.Errorf("must match pattern: %s", pattern)
-		}
-		return nil
 	}
 }

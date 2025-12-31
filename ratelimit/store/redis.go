@@ -1,3 +1,4 @@
+// Package store provides storage backends for rate limiting.
 package store
 
 import (
@@ -8,10 +9,22 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// incrScript is a Lua script that atomically increments a counter and sets its expiration.
+// This ensures that the INCR, EXPIRE, and TTL operations happen atomically without other
+// clients interleaving commands. Returns [count, ttl] where count is the new value and
+// ttl is the remaining time in seconds.
+var incrScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {count, ttl}
+`)
+
 // Redis is a Redis-backed implementation of Store suitable for distributed deployments.
-// Uses Redis atomic operations (INCR, EXPIRE) to ensure rate limit accuracy across
-// multiple instances in Kubernetes or other distributed environments. All operations
-// use pipelining for efficiency.
+// Uses Redis atomic operations via Lua scripts to ensure rate limit accuracy across
+// multiple instances in Kubernetes or other distributed environments.
 type Redis struct {
 	client *redis.Client
 	prefix string
@@ -32,6 +45,21 @@ type RedisConfig struct {
 
 	// Prefix is prepended to all keys to namespace rate limit data (default: "ratelimit:")
 	Prefix string
+
+	// PoolSize is the maximum number of connections (default: 10 * runtime.GOMAXPROCS)
+	PoolSize int
+
+	// MinIdleConns is the minimum number of idle connections (default: 0)
+	MinIdleConns int
+
+	// DialTimeout is the timeout for establishing new connections (default: 5s)
+	DialTimeout time.Duration
+
+	// ReadTimeout is the timeout for socket reads (default: 3s)
+	ReadTimeout time.Duration
+
+	// WriteTimeout is the timeout for socket writes (default: ReadTimeout)
+	WriteTimeout time.Duration
 }
 
 // NewRedis creates a Redis store with the given configuration.
@@ -50,11 +78,30 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 	if config.Prefix == "" {
 		config.Prefix = "ratelimit:"
 	}
-	client := redis.NewClient(&redis.Options{
+
+	opts := &redis.Options{
 		Addr:     config.URL,
 		Password: config.Password,
 		DB:       config.DB,
-	})
+	}
+
+	if config.PoolSize > 0 {
+		opts.PoolSize = config.PoolSize
+	}
+	if config.MinIdleConns > 0 {
+		opts.MinIdleConns = config.MinIdleConns
+	}
+	if config.DialTimeout > 0 {
+		opts.DialTimeout = config.DialTimeout
+	}
+	if config.ReadTimeout > 0 {
+		opts.ReadTimeout = config.ReadTimeout
+	}
+	if config.WriteTimeout > 0 {
+		opts.WriteTimeout = config.WriteTimeout
+	}
+
+	client := redis.NewClient(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -69,27 +116,35 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 	}, nil
 }
 
-// Increment atomically increments the counter for the given key using Redis INCR and EXPIRENX.
-// Uses pipelining to batch INCR, EXPIRENX, and TTL commands into a single round-trip to Redis.
-// Note: While pipelining reduces network latency, it does not provide atomicity - other clients
-// may interleave commands between the pipelined operations. For true atomicity, consider using
-// Redis Lua scripts if needed.
-// Returns the new count, time remaining until window reset, and any error.
+// Increment atomically increments the counter for the given key using a Lua script.
+// The script ensures that INCR, EXPIRE, and TTL operations execute atomically without
+// other clients interleaving commands. Returns the new count, time remaining until
+// window reset, and any error.
 func (r *Redis) Increment(ctx context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	fullKey := r.prefix + key
 
-	pipe := r.client.Pipeline()
-	incr := pipe.Incr(ctx, fullKey)
-	pipe.ExpireNX(ctx, fullKey, window)
-	ttlCmd := pipe.TTL(ctx, fullKey)
-
-	if _, err := pipe.Exec(ctx); err != nil {
+	result, err := incrScript.Run(ctx, r.client, []string{fullKey}, int(window.Seconds())).Slice()
+	if err != nil {
 		return 0, 0, fmt.Errorf("redis increment failed: %w", err)
 	}
 
-	ttl := min(window, ttlCmd.Val())
+	if len(result) != 2 {
+		return 0, 0, fmt.Errorf("unexpected result length: got %d, want 2", len(result))
+	}
 
-	return incr.Val(), ttl, nil
+	count, ok := result[0].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected type for count: %T", result[0])
+	}
+
+	ttlSeconds, ok := result[1].(int64)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected type for ttl: %T", result[1])
+	}
+
+	ttl := time.Duration(ttlSeconds) * time.Second
+
+	return count, ttl, nil
 }
 
 // Get retrieves the current count for the given key without incrementing.

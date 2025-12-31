@@ -1,7 +1,9 @@
 package slo_test
 
 import (
+	"bufio"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,7 +14,7 @@ import (
 	"github.com/nhalm/chikit/slo"
 )
 
-func TestTrack_Basic(t *testing.T) {
+func TestNew_Basic(t *testing.T) {
 	var capturedMetric slo.Metric
 	var callCount int
 
@@ -25,7 +27,7 @@ func TestTrack_Basic(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -53,7 +55,7 @@ func TestTrack_Basic(t *testing.T) {
 	}
 }
 
-func TestTrack_StatusCodes(t *testing.T) {
+func TestNew_StatusCodes(t *testing.T) {
 	tests := []struct {
 		name       string
 		statusCode int
@@ -75,7 +77,7 @@ func TestTrack_StatusCodes(t *testing.T) {
 				w.WriteHeader(tt.statusCode)
 			})
 
-			middleware := slo.Track(onMetric)
+			middleware := slo.New(onMetric)
 			tracked := middleware(handler)
 
 			req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -89,7 +91,7 @@ func TestTrack_StatusCodes(t *testing.T) {
 	}
 }
 
-func TestTrack_DefaultStatusCode(t *testing.T) {
+func TestNew_DefaultStatusCode(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -100,7 +102,7 @@ func TestTrack_DefaultStatusCode(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -112,7 +114,7 @@ func TestTrack_DefaultStatusCode(t *testing.T) {
 	}
 }
 
-func TestTrack_HTTPMethods(t *testing.T) {
+func TestNew_HTTPMethods(t *testing.T) {
 	methods := []string{"GET", "POST", "DELETE"}
 
 	for _, method := range methods {
@@ -127,7 +129,7 @@ func TestTrack_HTTPMethods(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			})
 
-			middleware := slo.Track(onMetric)
+			middleware := slo.New(onMetric)
 			tracked := middleware(handler)
 
 			req := httptest.NewRequest(method, "/test", http.NoBody)
@@ -141,7 +143,7 @@ func TestTrack_HTTPMethods(t *testing.T) {
 	}
 }
 
-func TestTrack_LatencyTracking(t *testing.T) {
+func TestNew_LatencyTracking(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -153,7 +155,7 @@ func TestTrack_LatencyTracking(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -169,7 +171,7 @@ func TestTrack_LatencyTracking(t *testing.T) {
 	}
 }
 
-func TestTrack_ChiRoutePattern(t *testing.T) {
+func TestNew_ChiRoutePattern(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -177,7 +179,7 @@ func TestTrack_ChiRoutePattern(t *testing.T) {
 	}
 
 	r := chi.NewRouter()
-	r.Use(slo.Track(onMetric))
+	r.Use(slo.New(onMetric))
 	r.Get("/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -191,7 +193,7 @@ func TestTrack_ChiRoutePattern(t *testing.T) {
 	}
 }
 
-func TestTrack_ChiNestedRoutes(t *testing.T) {
+func TestNew_ChiNestedRoutes(t *testing.T) {
 	var capturedMetrics []slo.Metric
 	var mu sync.Mutex
 
@@ -202,7 +204,7 @@ func TestTrack_ChiNestedRoutes(t *testing.T) {
 	}
 
 	r := chi.NewRouter()
-	r.Use(slo.Track(onMetric))
+	r.Use(slo.New(onMetric))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/users", func(w http.ResponseWriter, _ *http.Request) {
@@ -238,7 +240,7 @@ func TestTrack_ChiNestedRoutes(t *testing.T) {
 	}
 }
 
-func TestTrack_PerRouteMiddleware(t *testing.T) {
+func TestNew_PerRouteMiddleware(t *testing.T) {
 	var globalMetrics []slo.Metric
 	var apiMetrics []slo.Metric
 	var mu sync.Mutex
@@ -256,14 +258,14 @@ func TestTrack_PerRouteMiddleware(t *testing.T) {
 	}
 
 	r := chi.NewRouter()
-	r.Use(slo.Track(onGlobal))
+	r.Use(slo.New(onGlobal))
 
 	r.Get("/public", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		r.Use(slo.Track(onAPI))
+		r.Use(slo.New(onAPI))
 		r.Get("/users", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
@@ -290,7 +292,7 @@ func TestTrack_PerRouteMiddleware(t *testing.T) {
 	}
 }
 
-func TestTrack_MultipleRequests(t *testing.T) {
+func TestNew_MultipleRequests(t *testing.T) {
 	var metrics []slo.Metric
 	var mu sync.Mutex
 
@@ -304,7 +306,7 @@ func TestTrack_MultipleRequests(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	for i := 0; i < 10; i++ {
@@ -318,7 +320,7 @@ func TestTrack_MultipleRequests(t *testing.T) {
 	}
 }
 
-func TestTrack_ContextPropagation(t *testing.T) {
+func TestNew_ContextPropagation(t *testing.T) {
 	type contextKey string
 	const testKey contextKey = "test-key"
 
@@ -334,7 +336,7 @@ func TestTrack_ContextPropagation(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -350,7 +352,7 @@ func TestTrack_ContextPropagation(t *testing.T) {
 	}
 }
 
-func TestTrack_ConcurrentRequests(t *testing.T) {
+func TestNew_ConcurrentRequests(t *testing.T) {
 	var metrics []slo.Metric
 	var mu sync.Mutex
 
@@ -365,7 +367,7 @@ func TestTrack_ConcurrentRequests(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	const concurrency = 50
@@ -397,7 +399,7 @@ func TestTrack_ConcurrentRequests(t *testing.T) {
 	}
 }
 
-func TestTrack_ErrorClassification(t *testing.T) {
+func TestNew_ErrorClassification(t *testing.T) {
 	var successCount, clientErrorCount, serverErrorCount int
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -411,7 +413,7 @@ func TestTrack_ErrorClassification(t *testing.T) {
 		}
 	}
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 
 	statuses := []int{
 		http.StatusOK,
@@ -444,7 +446,7 @@ func TestTrack_ErrorClassification(t *testing.T) {
 	}
 }
 
-func TestTrack_NoChiContext(t *testing.T) {
+func TestNew_NoChiContext(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -455,7 +457,7 @@ func TestTrack_NoChiContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/some/path", http.NoBody)
@@ -467,7 +469,7 @@ func TestTrack_NoChiContext(t *testing.T) {
 	}
 }
 
-func TestTrack_Panic(t *testing.T) {
+func TestNew_Panic(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -478,7 +480,7 @@ func TestTrack_Panic(t *testing.T) {
 		panic("test panic")
 	})
 
-	middleware := slo.Track(onMetric)
+	middleware := slo.New(onMetric)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -509,7 +511,7 @@ func TestTrack_Panic(t *testing.T) {
 	}
 }
 
-func TestTrack_PanicWithChiRoute(t *testing.T) {
+func TestNew_PanicWithChiRoute(t *testing.T) {
 	var capturedMetric slo.Metric
 
 	onMetric := func(_ context.Context, m slo.Metric) {
@@ -517,7 +519,7 @@ func TestTrack_PanicWithChiRoute(t *testing.T) {
 	}
 
 	r := chi.NewRouter()
-	r.Use(slo.Track(onMetric))
+	r.Use(slo.New(onMetric))
 	r.Get("/users/{id}", func(_ http.ResponseWriter, _ *http.Request) {
 		panic("test panic")
 	})
@@ -542,7 +544,7 @@ func TestTrack_PanicWithChiRoute(t *testing.T) {
 	}
 }
 
-func TestTrack_CallbackPanic(t *testing.T) {
+func TestNew_CallbackPanic(t *testing.T) {
 	panicCallback := func(_ context.Context, _ slo.Metric) {
 		panic("callback panic")
 	}
@@ -551,7 +553,7 @@ func TestTrack_CallbackPanic(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := slo.Track(panicCallback)
+	middleware := slo.New(panicCallback)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -567,3 +569,159 @@ func TestTrack_CallbackPanic(t *testing.T) {
 
 	tracked.ServeHTTP(rec, req)
 }
+
+type flushableRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flushableRecorder) Flush() {
+	f.flushed = true
+}
+
+func TestResponseWriter_Flush_WithFlusher(t *testing.T) {
+	onMetric := func(_ context.Context, _ slo.Metric) {}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data"))
+
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		} else {
+			t.Error("expected ResponseWriter to implement http.Flusher")
+		}
+	})
+
+	middleware := slo.New(onMetric)
+	tracked := middleware(handler)
+
+	rec := &flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+
+	tracked.ServeHTTP(rec, req)
+
+	if !rec.flushed {
+		t.Error("expected Flush() to be called on underlying writer")
+	}
+}
+
+func TestResponseWriter_Flush_WithoutFlusher(t *testing.T) {
+	onMetric := func(_ context.Context, _ slo.Metric) {}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		} else {
+			t.Error("expected ResponseWriter to implement http.Flusher")
+		}
+	})
+
+	middleware := slo.New(onMetric)
+	tracked := middleware(handler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+
+	tracked.ServeHTTP(rec, req)
+}
+
+type hijackableRecorder struct {
+	*httptest.ResponseRecorder
+	hijacked bool
+	conn     net.Conn
+	rw       *bufio.ReadWriter
+}
+
+func (h *hijackableRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h.hijacked = true
+	return h.conn, h.rw, nil
+}
+
+func TestResponseWriter_Hijack_WithHijacker(t *testing.T) {
+	onMetric := func(_ context.Context, _ slo.Metric) {}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("expected ResponseWriter to implement http.Hijacker")
+			return
+		}
+
+		conn, rw, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("expected no error from Hijack(), got: %v", err)
+		}
+		if conn == nil {
+			t.Error("expected non-nil connection")
+		}
+		if rw == nil {
+			t.Error("expected non-nil ReadWriter")
+		}
+	})
+
+	middleware := slo.New(onMetric)
+	tracked := middleware(handler)
+
+	rec := &hijackableRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		conn:             &mockConn{},
+		rw:               bufio.NewReadWriter(bufio.NewReader(nil), bufio.NewWriter(nil)),
+	}
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+
+	tracked.ServeHTTP(rec, req)
+
+	if !rec.hijacked {
+		t.Error("expected Hijack() to be called on underlying writer")
+	}
+}
+
+func TestResponseWriter_Hijack_WithoutHijacker(t *testing.T) {
+	onMetric := func(_ context.Context, _ slo.Metric) {}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("expected ResponseWriter to implement http.Hijacker")
+			return
+		}
+
+		conn, rw, err := hijacker.Hijack()
+		if err == nil {
+			t.Error("expected error from Hijack() when underlying writer doesn't support it")
+		}
+		if err.Error() != "hijacking not supported" {
+			t.Errorf("expected error message 'hijacking not supported', got: %v", err)
+		}
+		if conn != nil {
+			t.Error("expected nil connection on error")
+		}
+		if rw != nil {
+			t.Error("expected nil ReadWriter on error")
+		}
+	})
+
+	middleware := slo.New(onMetric)
+	tracked := middleware(handler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", http.NoBody)
+
+	tracked.ServeHTTP(rec, req)
+}
+
+type mockConn struct {
+	net.Conn
+}
+
+func (m *mockConn) Read(_ []byte) (n int, err error)   { return 0, nil }
+func (m *mockConn) Write(_ []byte) (n int, err error)  { return 0, nil }
+func (m *mockConn) Close() error                       { return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return nil }
+func (m *mockConn) RemoteAddr() net.Addr               { return nil }
+func (m *mockConn) SetDeadline(_ time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(_ time.Time) error { return nil }

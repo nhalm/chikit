@@ -5,11 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
 func TestHandler_SuccessResponse(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusCreated, map[string]string{"id": "123"})
 	}))
 
@@ -37,7 +38,7 @@ func TestHandler_SuccessResponse(t *testing.T) {
 }
 
 func TestHandler_ErrorResponse(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetError(r, ErrNotFound.With("User not found"))
 	}))
 
@@ -65,7 +66,7 @@ func TestHandler_ErrorResponse(t *testing.T) {
 }
 
 func TestHandler_ErrorTakesPrecedence(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 		SetError(r, ErrUnauthorized)
 	}))
@@ -81,7 +82,7 @@ func TestHandler_ErrorTakesPrecedence(t *testing.T) {
 }
 
 func TestHandler_PanicRecovery(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("something went wrong")
 	}))
 
@@ -105,7 +106,7 @@ func TestHandler_PanicRecovery(t *testing.T) {
 }
 
 func TestHandler_CustomHeaders(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetHeader(r, "X-Request-ID", "abc123")
 		SetHeader(r, "X-RateLimit-Remaining", "99")
 		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
@@ -125,8 +126,7 @@ func TestHandler_CustomHeaders(t *testing.T) {
 }
 
 func TestHandler_EmptyResponse(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		// No SetResponse or SetError called
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -140,7 +140,7 @@ func TestHandler_EmptyResponse(t *testing.T) {
 }
 
 func TestHandler_StatusOnlyResponse(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusNoContent, nil)
 	}))
 
@@ -157,7 +157,7 @@ func TestHandler_StatusOnlyResponse(t *testing.T) {
 func TestHasState(t *testing.T) {
 	var hasStateInHandler bool
 
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		hasStateInHandler = HasState(r.Context())
 	}))
 
@@ -170,7 +170,6 @@ func TestHasState(t *testing.T) {
 		t.Error("expected HasState to return true inside Handler")
 	}
 
-	// Without wrapper
 	req2 := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	if HasState(req2.Context()) {
 		t.Error("expected HasState to return false without Handler")
@@ -193,7 +192,6 @@ func TestError_With(t *testing.T) {
 		t.Errorf("expected status %d, got %d", ErrNotFound.Status, err.Status)
 	}
 
-	// Original unchanged
 	if ErrNotFound.Message != "Resource not found" {
 		t.Error("original sentinel was modified")
 	}
@@ -224,8 +222,8 @@ func TestError_Is(t *testing.T) {
 
 func TestNewValidationError(t *testing.T) {
 	fieldErrors := []FieldError{
-		{Field: "email", Code: "required", Message: "Email is required"},
-		{Field: "age", Code: "min", Message: "Age must be at least 18"},
+		{Param: "email", Code: "required", Message: "Email is required"},
+		{Param: "age", Code: "min", Message: "Age must be at least 18"},
 	}
 
 	err := NewValidationError(fieldErrors)
@@ -245,9 +243,9 @@ func TestNewValidationError(t *testing.T) {
 }
 
 func TestValidationError_JSONFormat(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetError(r, NewValidationError([]FieldError{
-			{Field: "email", Code: "required", Message: "Email is required"},
+			{Param: "email", Code: "required", Message: "Email is required"},
 		}))
 	}))
 
@@ -275,13 +273,13 @@ func TestValidationError_JSONFormat(t *testing.T) {
 	if len(body.Error.Errors) != 1 {
 		t.Errorf("expected 1 field error, got %d", len(body.Error.Errors))
 	}
-	if body.Error.Errors[0].Field != "email" {
-		t.Errorf("expected field 'email', got %s", body.Error.Errors[0].Field)
+	if body.Error.Errors[0].Param != "email" {
+		t.Errorf("expected param 'email', got %s", body.Error.Errors[0].Param)
 	}
 }
 
 func TestAddHeader(t *testing.T) {
-	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		AddHeader(r, "X-Custom", "value1")
 		AddHeader(r, "X-Custom", "value2")
 		SetResponse(r, http.StatusOK, nil)
@@ -329,5 +327,252 @@ func TestAllSentinelErrors(t *testing.T) {
 		if sentinel.Status == 0 {
 			t.Errorf("sentinel %s has zero Status", sentinel.Code)
 		}
+	}
+}
+
+func TestError_Error(t *testing.T) {
+	err := &Error{
+		Type:    "test_error",
+		Code:    "test_code",
+		Message: "Test message",
+		Status:  http.StatusBadRequest,
+	}
+
+	if err.Error() != "Test message" {
+		t.Errorf("expected Error() to return 'Test message', got %s", err.Error())
+	}
+
+	customErr := ErrNotFound.With("Custom error message")
+	if customErr.Error() != "Custom error message" {
+		t.Errorf("expected Error() to return 'Custom error message', got %s", customErr.Error())
+	}
+}
+
+func TestError_IsWithNilReceiverAndTarget(t *testing.T) {
+	var nilErr *Error
+
+	if !nilErr.Is(nil) {
+		t.Error("expected nil error to match nil target")
+	}
+
+	if nilErr.Is(ErrNotFound) {
+		t.Error("expected nil error not to match non-nil target")
+	}
+}
+
+func TestError_WithNilReceiver(t *testing.T) {
+	var nilErr *Error
+
+	result := nilErr.With("Some message")
+	if result != nil {
+		t.Error("expected With() on nil receiver to return nil")
+	}
+}
+
+func TestError_WithParamNilReceiver(t *testing.T) {
+	var nilErr *Error
+
+	result := nilErr.WithParam("Some message", "param")
+	if result != nil {
+		t.Error("expected WithParam() on nil receiver to return nil")
+	}
+}
+
+func TestHandler_JSONEncodingFailureBody(t *testing.T) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		unencodable := make(chan int)
+		SetResponse(r, http.StatusOK, map[string]any{"channel": unencodable})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("expected Content-Type text/plain, got %s", ct)
+	}
+
+	if body := rec.Body.String(); body != "Internal server error" {
+		t.Errorf("expected body 'Internal server error', got %s", body)
+	}
+}
+
+func TestHandler_JSONEncodingFailureWithFunc(t *testing.T) {
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		unencodable := func() {}
+		SetResponse(r, http.StatusOK, map[string]any{"func": unencodable})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("expected Content-Type text/plain, got %s", ct)
+	}
+
+	if body := rec.Body.String(); body != "Internal server error" {
+		t.Errorf("expected body 'Internal server error', got %s", body)
+	}
+}
+
+func TestHandler_ConcurrentSetError(t *testing.T) {
+	const goroutines = 100
+
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				if idx%2 == 0 {
+					SetError(r, ErrNotFound.With("Error from goroutine"))
+				} else {
+					SetError(r, ErrUnauthorized.With("Different error"))
+				}
+			}(i)
+		}
+
+		wg.Wait()
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d or %d, got %d", http.StatusNotFound, http.StatusUnauthorized, rec.Code)
+	}
+
+	var body map[string]*Error
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["error"] == nil {
+		t.Error("expected error in response")
+	}
+}
+
+func TestHandler_ConcurrentSetResponse(t *testing.T) {
+	const goroutines = 100
+
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				SetResponse(r, http.StatusOK, map[string]int{"value": idx})
+			}(i)
+		}
+
+		wg.Wait()
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var body map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if _, ok := body["value"]; !ok {
+		t.Error("expected 'value' key in response")
+	}
+}
+
+func TestHandler_ConcurrentSetHeader(t *testing.T) {
+	const goroutines = 100
+
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			go func(_ int) {
+				defer wg.Done()
+				SetHeader(r, "X-Request-ID", "test-id")
+				AddHeader(r, "X-Custom", "value")
+			}(i)
+		}
+
+		wg.Wait()
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	if rec.Header().Get("X-Request-ID") != "test-id" {
+		t.Errorf("expected X-Request-ID=test-id, got %s", rec.Header().Get("X-Request-ID"))
+	}
+
+	customHeaders := rec.Header().Values("X-Custom")
+	if len(customHeaders) != goroutines {
+		t.Errorf("expected %d X-Custom headers, got %d", goroutines, len(customHeaders))
+	}
+}
+
+func TestHandler_ConcurrentMixedOperations(t *testing.T) {
+	const goroutines = 50
+
+	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var wg sync.WaitGroup
+		wg.Add(goroutines * 3)
+
+		for i := 0; i < goroutines; i++ {
+			go func(_ int) {
+				defer wg.Done()
+				SetError(r, ErrNotFound)
+			}(i)
+
+			go func(idx int) {
+				defer wg.Done()
+				SetResponse(r, http.StatusOK, map[string]int{"id": idx})
+			}(i)
+
+			go func(_ int) {
+				defer wg.Done()
+				SetHeader(r, "X-Test", "value")
+			}(i)
+		}
+
+		wg.Wait()
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == 0 {
+		t.Error("expected non-zero status code")
 	}
 }
