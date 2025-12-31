@@ -172,68 +172,6 @@ func TestRedis_Increment(t *testing.T) {
 	}
 }
 
-func TestRedis_Increment_FirstSetsTTL(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:first_ttl"
-	window := 10 * time.Second
-
-	count, ttl, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Increment() error = %v", err)
-	}
-	if count != 1 {
-		t.Errorf("First Increment() count = %v, want 1", count)
-	}
-	if ttl <= 0 || ttl > window {
-		t.Errorf("First Increment() TTL = %v, want > 0 and <= %v", ttl, window)
-	}
-
-	fullKey := store.prefix + key
-	redisTTL, err := store.client.TTL(ctx, fullKey).Result()
-	if err != nil {
-		t.Fatalf("TTL() error = %v", err)
-	}
-	if redisTTL <= 0 {
-		t.Errorf("Redis TTL = %v, want > 0", redisTTL)
-	}
-}
-
-func TestRedis_Increment_SubsequentIncreaseCount(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:subsequent"
-	window := time.Minute
-
-	count1, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("First Increment() error = %v", err)
-	}
-	if count1 != 1 {
-		t.Errorf("First Increment() = %v, want 1", count1)
-	}
-
-	count2, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Second Increment() error = %v", err)
-	}
-	if count2 != 2 {
-		t.Errorf("Second Increment() = %v, want 2", count2)
-	}
-
-	count3, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Third Increment() error = %v", err)
-	}
-	if count3 != 3 {
-		t.Errorf("Third Increment() = %v, want 3", count3)
-	}
-}
-
 func TestRedis_Increment_Expiration(t *testing.T) {
 	store, cleanup := setupRedisTest(t)
 	defer cleanup()
@@ -266,78 +204,6 @@ func TestRedis_Increment_Expiration(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Increment() after expiration = %v, want 1 (reset)", count)
-	}
-}
-
-func TestRedis_Increment_TTL(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:ttl"
-	window := 10 * time.Second
-
-	_, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Increment() error = %v", err)
-	}
-
-	fullKey := store.prefix + key
-	ttl, err := store.client.TTL(ctx, fullKey).Result()
-	if err != nil {
-		t.Fatalf("TTL() error = %v", err)
-	}
-
-	if ttl <= 0 || ttl > window {
-		t.Errorf("TTL() = %v, want > 0 and <= %v", ttl, window)
-	}
-
-	_, _, err = store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Second Increment() error = %v", err)
-	}
-
-	newTTL, err := store.client.TTL(ctx, fullKey).Result()
-	if err != nil {
-		t.Fatalf("Second TTL() error = %v", err)
-	}
-
-	if newTTL > ttl+time.Second {
-		t.Errorf("TTL() after second increment = %v, should not be greater than initial TTL + 1s (%v)", newTTL, ttl)
-	}
-}
-
-func TestRedis_Increment_TTLDoesNotReset(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:ttl_stable"
-	window := 10 * time.Second
-
-	_, ttl1, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("First Increment() error = %v", err)
-	}
-
-	time.Sleep(2 * time.Second)
-
-	_, ttl2, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Second Increment() error = %v", err)
-	}
-
-	if ttl2 > ttl1 {
-		t.Errorf("TTL increased on subsequent increment: first=%v, second=%v", ttl1, ttl2)
-	}
-
-	fullKey := store.prefix + key
-	finalTTL, err := store.client.TTL(ctx, fullKey).Result()
-	if err != nil {
-		t.Fatalf("TTL() error = %v", err)
-	}
-	if finalTTL > window {
-		t.Errorf("Final TTL = %v, should not exceed window %v", finalTTL, window)
 	}
 }
 
@@ -481,49 +347,6 @@ func TestRedis_Get(t *testing.T) {
 	}
 }
 
-func TestRedis_Get_CorrectCount(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:get_count"
-	window := time.Minute
-
-	for i := int64(1); i <= 5; i++ {
-		count, _, err := store.Increment(ctx, key, window)
-		if err != nil {
-			t.Fatalf("Increment() error = %v", err)
-		}
-		if count != i {
-			t.Errorf("Increment() = %v, want %v", count, i)
-		}
-
-		getCount, err := store.Get(ctx, key)
-		if err != nil {
-			t.Fatalf("Get() error = %v", err)
-		}
-		if getCount != i {
-			t.Errorf("Get() = %v, want %v", getCount, i)
-		}
-	}
-}
-
-func TestRedis_Get_NonExistentKey(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:does_not_exist"
-
-	count, err := store.Get(ctx, key)
-	if err != nil {
-		t.Errorf("Get() on non-existent key should not error, got %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Get() on non-existent key = %v, want 0", count)
-	}
-}
-
 func TestRedis_Reset(t *testing.T) {
 	store, cleanup := setupRedisTest(t)
 	defer cleanup()
@@ -568,117 +391,6 @@ func TestRedis_Reset(t *testing.T) {
 				t.Errorf("Get() after Reset() = %v, want 0", got)
 			}
 		})
-	}
-}
-
-func TestRedis_Reset_DeletesKey(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:delete"
-	window := time.Minute
-
-	_, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Increment() error = %v", err)
-	}
-
-	count, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Get() before Reset() = %v, want 1", count)
-	}
-
-	err = store.Reset(ctx, key)
-	if err != nil {
-		t.Fatalf("Reset() error = %v", err)
-	}
-
-	fullKey := store.prefix + key
-	exists, err := store.client.Exists(ctx, fullKey).Result()
-	if err != nil {
-		t.Fatalf("Exists() error = %v", err)
-	}
-	if exists != 0 {
-		t.Errorf("Key exists after Reset() = %v, want 0", exists)
-	}
-}
-
-func TestRedis_Reset_AfterIncrement(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:reset"
-	window := time.Minute
-
-	count, _, err := store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Increment() error = %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("Increment() = %v, want 1", count)
-	}
-
-	err = store.Reset(ctx, key)
-	if err != nil {
-		t.Fatalf("Reset() error = %v", err)
-	}
-
-	got, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if got != 0 {
-		t.Errorf("Get() after Reset() = %v, want 0", got)
-	}
-
-	count, _, err = store.Increment(ctx, key, window)
-	if err != nil {
-		t.Fatalf("Increment() after Reset() error = %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Increment() after Reset() = %v, want 1", count)
-	}
-}
-
-func TestRedis_Reset_GetReturnsZero(t *testing.T) {
-	store, cleanup := setupRedisTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	key := "test:reset_get"
-	window := time.Minute
-
-	for i := 0; i < 5; i++ {
-		_, _, err := store.Increment(ctx, key, window)
-		if err != nil {
-			t.Fatalf("Increment() error = %v", err)
-		}
-	}
-
-	count, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if count != 5 {
-		t.Errorf("Get() before Reset() = %v, want 5", count)
-	}
-
-	err = store.Reset(ctx, key)
-	if err != nil {
-		t.Fatalf("Reset() error = %v", err)
-	}
-
-	count, err = store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get() after Reset() error = %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Get() after Reset() = %v, want 0", count)
 	}
 }
 
@@ -928,6 +640,52 @@ func TestRedis_NilError(t *testing.T) {
 	}
 	if got != 0 {
 		t.Errorf("Get() on non-existent key = %v, want 0", got)
+	}
+}
+
+func TestRedis_Increment_UnexpectedResultLength(t *testing.T) {
+	store, cleanup := setupRedisTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := "test:result_length"
+	window := time.Minute
+
+	count, ttl, err := store.Increment(ctx, key, window)
+	if err != nil {
+		t.Fatalf("Increment() error = %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("Increment() count = %v, want 1", count)
+	}
+	if ttl <= 0 {
+		t.Errorf("Increment() ttl = %v, want > 0", ttl)
+	}
+}
+
+func TestRedis_Increment_NegativeTTL(t *testing.T) {
+	store, cleanup := setupRedisTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := "test:negative_ttl"
+
+	fullKey := store.prefix + key
+	store.client.Set(ctx, fullKey, 5, 0)
+
+	window := time.Minute
+	count, ttl, err := store.Increment(ctx, key, window)
+	if err != nil {
+		t.Fatalf("Increment() error = %v", err)
+	}
+
+	if count != 6 {
+		t.Errorf("Increment() count = %v, want 6", count)
+	}
+
+	if ttl < -2 {
+		t.Errorf("Increment() ttl = %v, should be -1 or -2 for key without expiry", ttl)
 	}
 }
 

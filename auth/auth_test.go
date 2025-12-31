@@ -501,3 +501,45 @@ func TestBearerToken_WithWrapper_InvalidToken(t *testing.T) {
 		t.Errorf("expected message 'Invalid bearer token', got %s", resp["error"].Message)
 	}
 }
+
+func TestAPIKey_WhitespaceOnly(t *testing.T) {
+	validator := func(key string) bool {
+		return key == "valid-key"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("X-API-Key", "   ")
+	rec := httptest.NewRecorder()
+
+	middleware := auth.APIKey(validator)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401 for whitespace-only key, got %d", rec.Code)
+	}
+}
+
+func TestBearerToken_LowercaseBearer(t *testing.T) {
+	validator := func(token string) bool {
+		return token == "valid-token"
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	req := httptest.NewRequest("GET", "/", http.NoBody)
+	req.Header.Set("Authorization", "bearer valid-token")
+	rec := httptest.NewRecorder()
+
+	middleware := auth.BearerToken(validator)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401 for lowercase 'bearer', got %d", rec.Code)
+	}
+}

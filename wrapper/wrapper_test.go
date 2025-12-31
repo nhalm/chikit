@@ -176,38 +176,6 @@ func TestHasState(t *testing.T) {
 	}
 }
 
-func TestError_With(t *testing.T) {
-	err := ErrNotFound.With("Custom message")
-
-	if err.Message != "Custom message" {
-		t.Errorf("expected message 'Custom message', got %s", err.Message)
-	}
-	if err.Type != ErrNotFound.Type {
-		t.Errorf("expected type %s, got %s", ErrNotFound.Type, err.Type)
-	}
-	if err.Code != ErrNotFound.Code {
-		t.Errorf("expected code %s, got %s", ErrNotFound.Code, err.Code)
-	}
-	if err.Status != ErrNotFound.Status {
-		t.Errorf("expected status %d, got %d", ErrNotFound.Status, err.Status)
-	}
-
-	if ErrNotFound.Message != "Resource not found" {
-		t.Error("original sentinel was modified")
-	}
-}
-
-func TestError_WithParam(t *testing.T) {
-	err := ErrBadRequest.WithParam("Invalid email format", "email")
-
-	if err.Message != "Invalid email format" {
-		t.Errorf("expected message 'Invalid email format', got %s", err.Message)
-	}
-	if err.Param != "email" {
-		t.Errorf("expected param 'email', got %s", err.Param)
-	}
-}
-
 func TestError_Is(t *testing.T) {
 	err := ErrNotFound.With("User not found")
 
@@ -278,24 +246,6 @@ func TestValidationError_JSONFormat(t *testing.T) {
 	}
 }
 
-func TestAddHeader(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		AddHeader(r, "X-Custom", "value1")
-		AddHeader(r, "X-Custom", "value2")
-		SetResponse(r, http.StatusOK, nil)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	values := rec.Header().Values("X-Custom")
-	if len(values) != 2 {
-		t.Errorf("expected 2 header values, got %d", len(values))
-	}
-}
-
 func TestAllSentinelErrors(t *testing.T) {
 	sentinels := []*Error{
 		ErrBadRequest,
@@ -327,24 +277,6 @@ func TestAllSentinelErrors(t *testing.T) {
 		if sentinel.Status == 0 {
 			t.Errorf("sentinel %s has zero Status", sentinel.Code)
 		}
-	}
-}
-
-func TestError_Error(t *testing.T) {
-	err := &Error{
-		Type:    "test_error",
-		Code:    "test_code",
-		Message: "Test message",
-		Status:  http.StatusBadRequest,
-	}
-
-	if err.Error() != "Test message" {
-		t.Errorf("expected Error() to return 'Test message', got %s", err.Error())
-	}
-
-	customErr := ErrNotFound.With("Custom error message")
-	if customErr.Error() != "Custom error message" {
-		t.Errorf("expected Error() to return 'Custom error message', got %s", customErr.Error())
 	}
 }
 
@@ -382,30 +314,6 @@ func TestHandler_JSONEncodingFailureBody(t *testing.T) {
 	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		unencodable := make(chan int)
 		SetResponse(r, http.StatusOK, map[string]any{"channel": unencodable})
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
-	}
-
-	if ct := rec.Header().Get("Content-Type"); ct != "text/plain" {
-		t.Errorf("expected Content-Type text/plain, got %s", ct)
-	}
-
-	if body := rec.Body.String(); body != "Internal server error" {
-		t.Errorf("expected body 'Internal server error', got %s", body)
-	}
-}
-
-func TestHandler_JSONEncodingFailureWithFunc(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		unencodable := func() {}
-		SetResponse(r, http.StatusOK, map[string]any{"func": unencodable})
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)

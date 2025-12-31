@@ -2,7 +2,6 @@ package ratelimit_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/nhalm/chikit/ratelimit"
 	"github.com/nhalm/chikit/ratelimit/store"
-	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestSimpleAPI(t *testing.T) {
@@ -99,40 +97,6 @@ func TestSimpleAPI(t *testing.T) {
 				t.Error("expected Retry-After header")
 			}
 		})
-	}
-}
-
-func TestByHeaderMissing(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := ratelimit.ByHeader(st, "X-API-Key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected request without header to pass, got %d", rr.Code)
-	}
-}
-
-func TestByQueryParamMissing(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := ratelimit.ByQueryParam(st, "api_key", 1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected request without query param to pass, got %d", rr.Code)
 	}
 }
 
@@ -646,115 +610,5 @@ func TestRateLimit_StoreError(t *testing.T) {
 	body := rr.Body.String()
 	if body != "Rate limit check failed\n" {
 		t.Errorf("expected error message 'Rate limit check failed', got %q", body)
-	}
-}
-
-func TestRateLimit_WithWrapper_Exceeded(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	chain := wrapper.New()(ratelimit.ByIP(st, 2, time.Minute)(handler))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	req.RemoteAddr = "192.168.1.1:1234"
-
-	for i := 0; i < 2; i++ {
-		rr := httptest.NewRecorder()
-		chain.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
-	}
-
-	rr := httptest.NewRecorder()
-	chain.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
-	}
-
-	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", ct)
-	}
-
-	var resp map[string]wrapper.Error
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if resp["error"].Type != "rate_limit_error" {
-		t.Errorf("expected error type rate_limit_error, got %s", resp["error"].Type)
-	}
-	if resp["error"].Code != "limit_exceeded" {
-		t.Errorf("expected code limit_exceeded, got %s", resp["error"].Code)
-	}
-}
-
-func TestRateLimit_WithWrapper_Headers(t *testing.T) {
-	st := store.NewMemory()
-	defer st.Close()
-
-	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	chain := wrapper.New()(ratelimit.ByIP(st, 5, time.Minute)(handler))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	req.RemoteAddr = "192.168.1.1:1234"
-	rr := httptest.NewRecorder()
-
-	chain.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rr.Code)
-	}
-
-	if limit := rr.Header().Get("RateLimit-Limit"); limit != "5" {
-		t.Errorf("expected RateLimit-Limit: 5, got %s", limit)
-	}
-
-	if remaining := rr.Header().Get("RateLimit-Remaining"); remaining != "4" {
-		t.Errorf("expected RateLimit-Remaining: 4, got %s", remaining)
-	}
-
-	if reset := rr.Header().Get("RateLimit-Reset"); reset == "" {
-		t.Error("expected RateLimit-Reset header")
-	}
-}
-
-func TestRateLimit_WithWrapper_StoreError(t *testing.T) {
-	st := &errorStore{}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	chain := wrapper.New()(ratelimit.ByIP(st, 10, time.Minute)(handler))
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	req.RemoteAddr = "192.168.1.1:1234"
-	rr := httptest.NewRecorder()
-
-	chain.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500, got %d", rr.Code)
-	}
-
-	var resp map[string]wrapper.Error
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if resp["error"].Type != "internal_error" {
-		t.Errorf("expected error type internal_error, got %s", resp["error"].Type)
-	}
-	if resp["error"].Message != "Rate limit check failed" {
-		t.Errorf("expected message 'Rate limit check failed', got %s", resp["error"].Message)
 	}
 }

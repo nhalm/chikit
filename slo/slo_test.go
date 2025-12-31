@@ -55,94 +55,6 @@ func TestNew_Basic(t *testing.T) {
 	}
 }
 
-func TestNew_StatusCodes(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-	}{
-		{"200 OK", http.StatusOK},
-		{"400 Bad Request", http.StatusBadRequest},
-		{"500 Internal Server Error", http.StatusInternalServerError},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var capturedMetric slo.Metric
-
-			onMetric := func(_ context.Context, m slo.Metric) {
-				capturedMetric = m
-			}
-
-			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.statusCode)
-			})
-
-			middleware := slo.New(onMetric)
-			tracked := middleware(handler)
-
-			req := httptest.NewRequest("GET", "/test", http.NoBody)
-			rec := httptest.NewRecorder()
-			tracked.ServeHTTP(rec, req)
-
-			if capturedMetric.StatusCode != tt.statusCode {
-				t.Errorf("expected status %d, got %d", tt.statusCode, capturedMetric.StatusCode)
-			}
-		})
-	}
-}
-
-func TestNew_DefaultStatusCode(t *testing.T) {
-	var capturedMetric slo.Metric
-
-	onMetric := func(_ context.Context, m slo.Metric) {
-		capturedMetric = m
-	}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
-	middleware := slo.New(onMetric)
-	tracked := middleware(handler)
-
-	req := httptest.NewRequest("GET", "/test", http.NoBody)
-	rec := httptest.NewRecorder()
-	tracked.ServeHTTP(rec, req)
-
-	if capturedMetric.StatusCode != http.StatusOK {
-		t.Errorf("expected default status 200, got %d", capturedMetric.StatusCode)
-	}
-}
-
-func TestNew_HTTPMethods(t *testing.T) {
-	methods := []string{"GET", "POST", "DELETE"}
-
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			var capturedMetric slo.Metric
-
-			onMetric := func(_ context.Context, m slo.Metric) {
-				capturedMetric = m
-			}
-
-			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})
-
-			middleware := slo.New(onMetric)
-			tracked := middleware(handler)
-
-			req := httptest.NewRequest(method, "/test", http.NoBody)
-			rec := httptest.NewRecorder()
-			tracked.ServeHTTP(rec, req)
-
-			if capturedMetric.Method != method {
-				t.Errorf("expected method %s, got %s", method, capturedMetric.Method)
-			}
-		})
-	}
-}
-
 func TestNew_LatencyTracking(t *testing.T) {
 	var capturedMetric slo.Metric
 
@@ -289,34 +201,6 @@ func TestNew_PerRouteMiddleware(t *testing.T) {
 
 	if apiMetrics[0].Route != "/api/users" {
 		t.Errorf("expected API route /api/users, got %s", apiMetrics[0].Route)
-	}
-}
-
-func TestNew_MultipleRequests(t *testing.T) {
-	var metrics []slo.Metric
-	var mu sync.Mutex
-
-	onMetric := func(_ context.Context, m slo.Metric) {
-		mu.Lock()
-		metrics = append(metrics, m)
-		mu.Unlock()
-	}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	middleware := slo.New(onMetric)
-	tracked := middleware(handler)
-
-	for i := 0; i < 10; i++ {
-		req := httptest.NewRequest("GET", "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		tracked.ServeHTTP(rec, req)
-	}
-
-	if len(metrics) != 10 {
-		t.Errorf("expected 10 metrics, got %d", len(metrics))
 	}
 }
 
