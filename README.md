@@ -16,7 +16,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
 - **Request Binding**: JSON body and query parameter binding with validation
 - **Authentication**: API key and bearer token validation with custom validators
-- **SLO Tracking**: Callback-based metrics for latency, traffic, and errors
+- **SLO Tracking**: Per-route SLO classification with PASS/FAIL logging via canonlog
 - **Zero Config Files**: Pure code configuration - no config files or environment variables
 - **Distributed-Ready**: Redis backend for Kubernetes deployments
 - **Fluent API**: Chainable, readable middleware configuration
@@ -155,6 +155,43 @@ r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("something went wrong")  // Returns {"error": {"type": "internal_error", ...}}
 })
 ```
+
+### Canonical Logging
+
+Integrate with [canonlog](https://github.com/nhalm/canonlog) for structured request logging:
+
+```go
+import "github.com/nhalm/canonlog"
+
+func main() {
+    canonlog.SetupGlobalLogger("info", "json")
+
+    r := chi.NewRouter()
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+            return map[string]any{
+                "request_id": r.Header.Get("X-Request-ID"),
+                "tenant_id":  r.Header.Get("X-Tenant-ID"),
+            }
+        }),
+    ))
+}
+```
+
+This automatically logs for each request:
+- `method`, `path`, `route` (Chi route pattern)
+- `status`, `duration_ms`
+- `errors` array (when errors occur)
+
+Output:
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":45,"request_id":"abc-123"}
+```
+
+### SLO Integration
+
+Enable SLO status logging with `WithSLOs()`. See [SLO Tracking](#slo-tracking) for details.
 
 ## Rate Limiting
 
@@ -607,185 +644,87 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 ## SLO Tracking
 
-Track service level objectives with callback-based metrics. The middleware captures request metrics and calls your callback function, allowing integration with any observability system without forcing specific client libraries.
+Track service level objectives with per-route SLO classification. The SLO package sets tier and target in request context, and the wrapper middleware logs PASS/FAIL status via canonlog.
+
+### Predefined Tiers
+
+| Tier | Target | Use Case |
+|------|--------|----------|
+| `Critical` | 50ms | Essential functions (99.99% availability) |
+| `HighFast` | 100ms | User-facing requests requiring quick responses |
+| `HighSlow` | 1000ms | Important requests tolerating higher latency |
+| `Low` | 5000ms | Background tasks, non-interactive functions |
 
 ### Basic Usage
 
 ```go
 import (
-    "context"
+    "github.com/nhalm/canonlog"
     "github.com/nhalm/chikit/slo"
+    "github.com/nhalm/chikit/wrapper"
 )
 
-// Define callback to handle metrics
-onMetric := func(ctx context.Context, m slo.Metric) {
-    // m.Method: HTTP method (GET, POST, etc.)
-    // m.Route: Chi route pattern ("/api/users/{id}")
-    // m.StatusCode: HTTP status code
-    // m.Duration: Request processing time
+func main() {
+    canonlog.SetupGlobalLogger("info", "json")
 
-    log.Printf("method=%s route=%s status=%d duration=%v",
-        m.Method, m.Route, m.StatusCode, m.Duration)
+    r := chi.NewRouter()
+
+    // Enable canonlog and SLO logging
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithSLOs(),
+    ))
+
+    // Set SLO tier per route
+    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
+    r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
+    r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
+    r.With(slo.Track(slo.Low)).Post("/batch", batchProcess)
 }
-
-r.Use(slo.New(onMetric))
 ```
 
-### Prometheus Integration
+### Custom Targets
 
-Example showing how to adapt the callback for Prometheus (prometheus/client_golang is not a dependency):
+For routes that don't fit predefined tiers:
 
 ```go
-import (
-    "context"
-    "strconv"
-
-    "github.com/nhalm/chikit/slo"
-    "github.com/prometheus/client_golang/prometheus"
-    "github.com/prometheus/client_golang/prometheus/promauto"
-)
-
-var (
-    httpDuration = promauto.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name: "http_request_duration_seconds",
-            Help: "HTTP request latency in seconds",
-            Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-        },
-        []string{"method", "route", "status"},
-    )
-
-    httpRequestsTotal = promauto.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "http_requests_total",
-            Help: "Total number of HTTP requests",
-        },
-        []string{"method", "route", "status"},
-    )
-)
-
-func prometheusCallback(ctx context.Context, m slo.Metric) {
-    labels := prometheus.Labels{
-        "method": m.Method,
-        "route":  m.Route,
-        "status": strconv.Itoa(m.StatusCode),
-    }
-
-    httpDuration.With(labels).Observe(m.Duration.Seconds())
-    httpRequestsTotal.With(labels).Inc()
-}
-
-r.Use(slo.New(prometheusCallback))
+r.With(slo.TrackWithTarget(200 * time.Millisecond)).Get("/custom", handler)
 ```
 
-### Datadog Integration
+Custom targets are logged with `slo_class: "custom"`.
 
-Example showing how to adapt the callback for Datadog (DataDog/datadog-go is not a dependency):
+### Log Output
 
-```go
-import (
-    "context"
-    "fmt"
-
-    "github.com/DataDog/datadog-go/v5/statsd"
-    "github.com/nhalm/chikit/slo"
-)
-
-func datadogCallback(client *statsd.Client) func(context.Context, slo.Metric) {
-    return func(ctx context.Context, m slo.Metric) {
-        tags := []string{
-            fmt.Sprintf("method:%s", m.Method),
-            fmt.Sprintf("route:%s", m.Route),
-            fmt.Sprintf("status:%d", m.StatusCode),
-        }
-
-        // Send timing metric
-        client.Timing("http.request.duration", m.Duration, tags, 1.0)
-
-        // Increment request counter
-        client.Incr("http.request.count", tags, 1.0)
-
-        // Track errors
-        if m.StatusCode >= 500 {
-            client.Incr("http.request.errors", tags, 1.0)
-        }
-    }
-}
-
-// Usage
-ddClient, _ := statsd.New("127.0.0.1:8125")
-r.Use(slo.New(datadogCallback(ddClient)))
+Success (within target):
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":45,"slo_class":"high_fast","slo_status":"PASS"}
 ```
 
-### OpenTelemetry Integration
-
-Example showing how to adapt the callback for OpenTelemetry:
-
-```go
-import (
-    "context"
-    "strconv"
-
-    "github.com/nhalm/chikit/slo"
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/metric"
-)
-
-func otelCallback(meter metric.Meter) func(context.Context, slo.Metric) {
-    histogram, _ := meter.Float64Histogram(
-        "http.server.request.duration",
-        metric.WithUnit("s"),
-        metric.WithDescription("HTTP request duration"),
-    )
-
-    counter, _ := meter.Int64Counter(
-        "http.server.request.count",
-        metric.WithDescription("Total HTTP requests"),
-    )
-
-    return func(ctx context.Context, m slo.Metric) {
-        attrs := []attribute.KeyValue{
-            attribute.String("http.method", m.Method),
-            attribute.String("http.route", m.Route),
-            attribute.Int("http.status_code", m.StatusCode),
-        }
-
-        histogram.Record(ctx, m.Duration.Seconds(), metric.WithAttributes(attrs...))
-        counter.Add(ctx, 1, metric.WithAttributes(attrs...))
-    }
-}
-
-// Usage
-meter := otel.Meter("chikit")
-r.Use(slo.New(otelCallback(meter)))
+SLO breach (exceeded target):
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":150,"slo_class":"high_fast","slo_status":"FAIL"}
 ```
 
-### Per-Route Tracking
+### Alerting
 
-Track metrics for specific routes only:
+Use your log aggregator to create alerts based on SLO status:
 
-```go
-r.Route("/api/v1", func(r chi.Router) {
-    r.Use(slo.New(onMetric))  // Track only /api/v1 routes
-    r.Get("/users", listUsers)
-    r.Post("/users", createUser)
-})
+```sql
+-- Example: Alert when >1% of high_fast requests fail in 5 minutes
+SELECT
+  COUNT(*) FILTER (WHERE slo_status = 'FAIL') * 100.0 / COUNT(*) as failure_rate
+FROM logs
+WHERE slo_class = 'high_fast'
+  AND timestamp > NOW() - INTERVAL '5 minutes'
+HAVING failure_rate > 1.0
 ```
 
-### Panic Handling
+### Routes Without SLO
 
-The middleware automatically handles panics, recording them as 500 errors before re-raising:
+Routes without `slo.Track()` middleware won't have SLO fields in logs:
 
-```go
-onMetric := func(ctx context.Context, m slo.Metric) {
-    if m.StatusCode >= 500 {
-        // Log or alert on server errors
-        log.Printf("ERROR: %s %s returned %d", m.Method, m.Route, m.StatusCode)
-    }
-}
-
-r.Use(slo.New(onMetric))
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/misc","route":"/misc","status":200,"duration_ms":30}
 ```
 
 ## Complete Example
@@ -794,7 +733,6 @@ r.Use(slo.New(onMetric))
 package main
 
 import (
-    "context"
     "log"
     "net/http"
     "time"
@@ -802,6 +740,7 @@ import (
     "github.com/go-chi/chi/v5"
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
+    "github.com/nhalm/canonlog"
     "github.com/nhalm/chikit/auth"
     "github.com/nhalm/chikit/bind"
     "github.com/nhalm/chikit/headers"
@@ -818,27 +757,31 @@ type ListUsersQuery struct {
 }
 
 func main() {
+    // Setup canonical logging
+    canonlog.SetupGlobalLogger("info", "json")
+
     r := chi.NewRouter()
 
     // Standard Chi middleware
     r.Use(middleware.RequestID)
     r.Use(middleware.RealIP)
-    r.Use(middleware.Logger)
 
-    // Wrapper for context-based response handling
-    r.Use(wrapper.New())
+    // Wrapper with canonlog and SLO logging
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+            return map[string]any{
+                "request_id": middleware.GetReqID(r.Context()),
+            }
+        }),
+        wrapper.WithSLOs(),
+    ))
 
     // Bind middleware for request binding/validation
     r.Use(bind.New())
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
-
-    // SLO tracking with callback
-    r.Use(slo.New(func(ctx context.Context, m slo.Metric) {
-        log.Printf("method=%s route=%s status=%d duration=%v",
-            m.Method, m.Route, m.StatusCode, m.Duration)
-    }))
 
     // Validate environment header
     r.Use(validate.NewHeaders(
@@ -873,6 +816,9 @@ func main() {
         WithIP().
         Limit(1000, time.Hour))
 
+    // Health check with strict SLO
+    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
+
     // API routes
     r.Route("/api/v1", func(r chi.Router) {
         // API key authentication
@@ -887,8 +833,10 @@ func main() {
             WithHeader("X-Tenant-ID").
             Limit(100, time.Minute))
 
-        r.Get("/users", listUsers)
-        r.Post("/users", createUser)
+        r.With(slo.Track(slo.HighFast)).Get("/users", listUsers)
+        r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
+        r.With(slo.Track(slo.HighFast)).Post("/users", createUser)
+        r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
     })
 
     log.Fatal(http.ListenAndServe(":8080", r))
@@ -897,6 +845,10 @@ func main() {
 func validateAPIKey(key string) bool {
     // Implement your API key validation
     return true
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
@@ -920,6 +872,10 @@ func listUsers(w http.ResponseWriter, r *http.Request) {
     })
 }
 
+func getUser(w http.ResponseWriter, r *http.Request) {
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"id": chi.URLParam(r, "id")})
+}
+
 func createUser(w http.ResponseWriter, r *http.Request) {
     val, ok := headers.FromContext(r.Context(), "tenant_id")
     if !ok {
@@ -932,6 +888,11 @@ func createUser(w http.ResponseWriter, r *http.Request) {
     wrapper.SetResponse(r, http.StatusCreated, map[string]any{
         "tenant": tenantID.String(),
     })
+}
+
+func generateReport(w http.ResponseWriter, r *http.Request) {
+    // Long-running report generation...
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "complete"})
 }
 ```
 
