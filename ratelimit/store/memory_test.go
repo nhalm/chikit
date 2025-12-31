@@ -382,6 +382,294 @@ func TestMemory_Expiration(t *testing.T) {
 	}
 }
 
+func TestMemory_Cleanup_ExpiredEntriesRemoved(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	expiredKeys := []string{"test:expired1", "test:expired2", "test:expired3"}
+	shortTTL := 10 * time.Millisecond
+
+	for _, key := range expiredKeys {
+		_, _, err := m.Increment(ctx, key, shortTTL)
+		if err != nil {
+			t.Fatalf("Increment(%s) error = %v", key, err)
+		}
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	m.runCleanup()
+
+	m.mu.RLock()
+	entriesCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if entriesCount != 0 {
+		t.Errorf("cleanup failed: %d entries remain, want 0", entriesCount)
+	}
+
+	for _, key := range expiredKeys {
+		got, err := m.Get(ctx, key)
+		if err != nil {
+			t.Errorf("Get(%s) error = %v", key, err)
+		}
+		if got != 0 {
+			t.Errorf("Get(%s) = %v after cleanup, want 0", key, got)
+		}
+	}
+}
+
+func TestMemory_Cleanup_NonExpiredEntriesPreserved(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	keys := map[string]int64{
+		"test:long1": 5,
+		"test:long2": 10,
+		"test:long3": 15,
+	}
+	longTTL := time.Hour
+
+	for key, count := range keys {
+		for i := int64(0); i < count; i++ {
+			_, _, err := m.Increment(ctx, key, longTTL)
+			if err != nil {
+				t.Fatalf("Increment(%s) error = %v", key, err)
+			}
+		}
+	}
+
+	m.runCleanup()
+
+	m.mu.RLock()
+	entriesCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if entriesCount != len(keys) {
+		t.Errorf("cleanup removed non-expired entries: %d entries remain, want %d", entriesCount, len(keys))
+	}
+
+	for key, wantCount := range keys {
+		got, err := m.Get(ctx, key)
+		if err != nil {
+			t.Errorf("Get(%s) error = %v", key, err)
+		}
+		if got != wantCount {
+			t.Errorf("Get(%s) = %v after cleanup, want %v", key, got, wantCount)
+		}
+	}
+}
+
+func TestMemory_Cleanup_MixedExpiredAndNonExpired(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+
+	expiredKeys := []string{"test:expired1", "test:expired2"}
+	shortTTL := 10 * time.Millisecond
+	for _, key := range expiredKeys {
+		_, _, err := m.Increment(ctx, key, shortTTL)
+		if err != nil {
+			t.Fatalf("Increment(%s) error = %v", key, err)
+		}
+	}
+
+	activeKeys := map[string]int64{
+		"test:active1": 3,
+		"test:active2": 7,
+	}
+	longTTL := time.Hour
+	for key, count := range activeKeys {
+		for i := int64(0); i < count; i++ {
+			_, _, err := m.Increment(ctx, key, longTTL)
+			if err != nil {
+				t.Fatalf("Increment(%s) error = %v", key, err)
+			}
+		}
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	m.runCleanup()
+
+	m.mu.RLock()
+	entriesCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if entriesCount != len(activeKeys) {
+		t.Errorf("cleanup failed: %d entries remain, want %d", entriesCount, len(activeKeys))
+	}
+
+	for _, key := range expiredKeys {
+		got, err := m.Get(ctx, key)
+		if err != nil {
+			t.Errorf("Get(%s) error = %v", key, err)
+		}
+		if got != 0 {
+			t.Errorf("expired key %s = %v after cleanup, want 0", key, got)
+		}
+	}
+
+	for key, wantCount := range activeKeys {
+		got, err := m.Get(ctx, key)
+		if err != nil {
+			t.Errorf("Get(%s) error = %v", key, err)
+		}
+		if got != wantCount {
+			t.Errorf("active key %s = %v after cleanup, want %v", key, got, wantCount)
+		}
+	}
+}
+
+func TestMemory_Cleanup_ConcurrentWithIncrements(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	key := "test:concurrent"
+	window := time.Hour
+	goroutines := 5
+	incrementsPerGoroutine := 20
+	cleanupCycles := 10
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines + 1)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < incrementsPerGoroutine; j++ {
+				_, _, err := m.Increment(ctx, key, window)
+				if err != nil {
+					t.Errorf("Increment() error = %v", err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < cleanupCycles; i++ {
+			m.runCleanup()
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+
+	expectedCount := int64(goroutines * incrementsPerGoroutine)
+	got, err := m.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got != expectedCount {
+		t.Errorf("Get() = %v after concurrent cleanup, want %v", got, expectedCount)
+	}
+}
+
+func TestMemory_Cleanup_RaceWithExpiredIncrements(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	shortTTL := 5 * time.Millisecond
+	goroutines := 10
+	iterations := 10
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines + 1)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			key := "test:key:" + string(rune(id))
+			for j := 0; j < iterations; j++ {
+				_, _, err := m.Increment(ctx, key, shortTTL)
+				if err != nil {
+					t.Errorf("Increment() error = %v", err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}(i)
+	}
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			m.runCleanup()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+
+	time.Sleep(10 * time.Millisecond)
+	m.runCleanup()
+
+	m.mu.RLock()
+	entriesCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if entriesCount != 0 {
+		t.Errorf("final cleanup failed: %d entries remain, want 0", entriesCount)
+	}
+}
+
+func TestMemory_Cleanup_EmptyStore(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	m.runCleanup()
+
+	m.mu.RLock()
+	entriesCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if entriesCount != 0 {
+		t.Errorf("cleanup on empty store created entries: %d entries, want 0", entriesCount)
+	}
+}
+
+func TestMemory_Cleanup_OnlyExpiredEntries(t *testing.T) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	shortTTL := 10 * time.Millisecond
+
+	for i := 0; i < 100; i++ {
+		key := "test:expired:" + string(rune(i))
+		_, _, err := m.Increment(ctx, key, shortTTL)
+		if err != nil {
+			t.Fatalf("Increment(%s) error = %v", key, err)
+		}
+	}
+
+	m.mu.RLock()
+	initialCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if initialCount != 100 {
+		t.Fatalf("setup failed: got %d entries, want 100", initialCount)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	m.runCleanup()
+
+	m.mu.RLock()
+	finalCount := len(m.entries)
+	m.mu.RUnlock()
+
+	if finalCount != 0 {
+		t.Errorf("cleanup failed: %d entries remain, want 0", finalCount)
+	}
+}
+
 func BenchmarkMemory_Increment(b *testing.B) {
 	m := NewMemory()
 	defer m.Close()
@@ -444,4 +732,22 @@ func BenchmarkMemory_Get_Parallel(b *testing.B) {
 			_, _ = m.Get(ctx, key)
 		}
 	})
+}
+
+func BenchmarkMemory_Cleanup(b *testing.B) {
+	m := NewMemory()
+	defer m.Close()
+
+	ctx := context.Background()
+	window := time.Hour
+
+	for i := 0; i < 1000; i++ {
+		key := "bench:key:" + string(rune(i))
+		_, _, _ = m.Increment(ctx, key, window)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.runCleanup()
+	}
 }

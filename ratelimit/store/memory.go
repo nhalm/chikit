@@ -96,6 +96,32 @@ func (m *Memory) Close() error {
 	return nil
 }
 
+// runCleanup executes a single cleanup cycle, removing all expired entries.
+// This is exposed for testing purposes to trigger cleanup without waiting for the ticker.
+func (m *Memory) runCleanup() {
+	now := time.Now()
+	var expiredKeys []string
+
+	m.mu.RLock()
+	for key, entry := range m.entries {
+		if now.After(entry.expiration) {
+			expiredKeys = append(expiredKeys, key)
+		}
+	}
+	m.mu.RUnlock()
+
+	if len(expiredKeys) > 0 {
+		m.mu.Lock()
+		now := time.Now()
+		for _, key := range expiredKeys {
+			if entry, exists := m.entries[key]; exists && now.After(entry.expiration) {
+				delete(m.entries, key)
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
 func (m *Memory) cleanup() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -103,24 +129,7 @@ func (m *Memory) cleanup() {
 	for {
 		select {
 		case <-ticker.C:
-			now := time.Now()
-			var expiredKeys []string
-
-			m.mu.RLock()
-			for key, entry := range m.entries {
-				if now.After(entry.expiration) {
-					expiredKeys = append(expiredKeys, key)
-				}
-			}
-			m.mu.RUnlock()
-
-			if len(expiredKeys) > 0 {
-				m.mu.Lock()
-				for _, key := range expiredKeys {
-					delete(m.entries, key)
-				}
-				m.mu.Unlock()
-			}
+			m.runCleanup()
 		case <-m.stopCh:
 			return
 		}

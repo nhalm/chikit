@@ -25,7 +25,6 @@
 package ratelimit
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -68,6 +67,16 @@ type Limiter struct {
 	headerMode HeaderMode
 }
 
+// Option configures a Limiter.
+type Option func(*Limiter)
+
+// WithHeaderMode configures when rate limit headers are included in responses.
+func WithHeaderMode(mode HeaderMode) Option {
+	return func(l *Limiter) {
+		l.headerMode = mode
+	}
+}
+
 // New creates a new rate limiter with the given store, limit, and window.
 // The keyFn determines what to rate limit by (IP, header, etc.).
 // Returns 429 (Too Many Requests) when the limit is exceeded, with standard
@@ -75,14 +84,21 @@ type Limiter struct {
 // Returns 500 (Internal Server Error) if the store operation fails.
 //
 // If keyFn returns an empty string, rate limiting is skipped for that request.
-func New(st store.Store, limit int, window time.Duration, keyFn KeyFunc) *Limiter {
-	return &Limiter{
+//
+// Options:
+//   - WithHeaderMode: Configure header visibility (default: HeadersAlways)
+func New(st store.Store, limit int, window time.Duration, keyFn KeyFunc, opts ...Option) *Limiter {
+	l := &Limiter{
 		store:      st,
 		limit:      int64(limit),
 		window:     window,
 		keyFn:      keyFn,
 		headerMode: HeadersAlways,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // Handler returns the rate limiting middleware.
@@ -166,7 +182,11 @@ func ByIP(st store.Store, limit int, window time.Duration) func(http.Handler) ht
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		return "ip:" + ip
+		var b strings.Builder
+		b.Grow(3 + len(ip))
+		b.WriteString("ip:")
+		b.WriteString(ip)
+		return b.String()
 	})
 	return limiter.Handler
 }
@@ -184,7 +204,13 @@ func ByHeader(st store.Store, header string, limit int, window time.Duration) fu
 		if val == "" {
 			return ""
 		}
-		return fmt.Sprintf("header:%s:%s", header, val)
+		var b strings.Builder
+		b.Grow(7 + len(header) + 1 + len(val))
+		b.WriteString("header:")
+		b.WriteString(header)
+		b.WriteByte(':')
+		b.WriteString(val)
+		return b.String()
 	})
 	return limiter.Handler
 }
@@ -198,7 +224,13 @@ func ByHeader(st store.Store, header string, limit int, window time.Duration) fu
 //	r.Use(ratelimit.ByEndpoint(store, 50, time.Minute)) // 50 req/min per endpoint
 func ByEndpoint(st store.Store, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := New(st, limit, window, func(r *http.Request) string {
-		return "endpoint:" + r.Method + ":" + r.URL.Path
+		var b strings.Builder
+		b.Grow(9 + len(r.Method) + 1 + len(r.URL.Path))
+		b.WriteString("endpoint:")
+		b.WriteString(r.Method)
+		b.WriteByte(':')
+		b.WriteString(r.URL.Path)
+		return b.String()
 	})
 	return limiter.Handler
 }
@@ -216,7 +248,13 @@ func ByQueryParam(st store.Store, param string, limit int, window time.Duration)
 		if val == "" {
 			return ""
 		}
-		return fmt.Sprintf("query:%s:%s", param, val)
+		var b strings.Builder
+		b.Grow(6 + len(param) + 1 + len(val))
+		b.WriteString("query:")
+		b.WriteString(param)
+		b.WriteByte(':')
+		b.WriteString(val)
+		return b.String()
 	})
 	return limiter.Handler
 }
@@ -280,7 +318,12 @@ func (b *Builder) WithIP() *Builder {
 // The key component format is "<method>:<path>".
 func (b *Builder) WithEndpoint() *Builder {
 	b.keyFns = append(b.keyFns, func(r *http.Request) string {
-		return r.Method + ":" + r.URL.Path
+		var sb strings.Builder
+		sb.Grow(len(r.Method) + 1 + len(r.URL.Path))
+		sb.WriteString(r.Method)
+		sb.WriteByte(':')
+		sb.WriteString(r.URL.Path)
+		return sb.String()
 	})
 	return b
 }
@@ -344,24 +387,31 @@ func (b *Builder) Limit(limit int, window time.Duration) func(http.Handler) http
 	b.window = window
 
 	keyFn := func(r *http.Request) string {
-		parts := make([]string, 0, len(b.keyFns)+1)
+		var sb strings.Builder
+		sb.Grow(20 + len(b.keyFns)*30)
+		hasContent := false
 
 		if b.name != "" {
-			parts = append(parts, b.name)
+			sb.WriteString(b.name)
+			hasContent = true
 		}
 
 		for _, fn := range b.keyFns {
 			if part := fn(r); part != "" {
-				parts = append(parts, part)
+				if hasContent {
+					sb.WriteByte(':')
+				}
+				sb.WriteString(part)
+				hasContent = true
 			}
 		}
-		if len(parts) == 0 {
+
+		if !hasContent {
 			return ""
 		}
-		return strings.Join(parts, ":")
+		return sb.String()
 	}
 
-	limiter := New(b.store, limit, window, keyFn)
-	limiter.headerMode = b.headerMode
+	limiter := New(b.store, limit, window, keyFn, WithHeaderMode(b.headerMode))
 	return limiter.Handler
 }

@@ -14,6 +14,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
+- **Request Binding**: JSON body and query parameter binding with validation
 - **Authentication**: API key and bearer token validation with custom validators
 - **SLO Tracking**: Callback-based metrics for latency, traffic, and errors
 - **Zero Config Files**: Pure code configuration - no config files or environment variables
@@ -40,7 +41,7 @@ import (
 
 func main() {
     r := chi.NewRouter()
-    r.Use(wrapper.Handler())  // Must be outermost middleware
+    r.Use(wrapper.New())  // Must be outermost middleware
 
     r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
         user, err := createUser(r)
@@ -93,8 +94,8 @@ For multiple field errors:
 
 ```go
 wrapper.SetError(r, wrapper.NewValidationError([]wrapper.FieldError{
-    {Field: "email", Code: "required", Message: "Email is required"},
-    {Field: "age", Code: "min", Message: "Age must be at least 18"},
+    {Param: "email", Code: "required", Message: "Email is required"},
+    {Param: "age", Code: "min", Message: "Age must be at least 18"},
 }))
 ```
 
@@ -107,8 +108,8 @@ JSON response:
     "code": "invalid_request",
     "message": "Validation failed",
     "errors": [
-      {"field": "email", "code": "required", "message": "Email is required"},
-      {"field": "age", "code": "min", "message": "Age must be at least 18"}
+      {"param": "email", "code": "required", "message": "Email is required"},
+      {"param": "age", "code": "min", "message": "Age must be at least 18"}
     ]
   }
 }
@@ -148,7 +149,7 @@ func MyMiddleware(next http.Handler) http.Handler {
 The Handler middleware automatically recovers from panics and returns a 500 error:
 
 ```go
-r.Use(wrapper.Handler())
+r.Use(wrapper.New())
 
 r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("something went wrong")  // Returns {"error": {"type": "internal_error", ...}}
@@ -339,11 +340,12 @@ r.Route("/api", func(r chi.Router) {
 })
 
 // Tier 3: Expensive operation protection
-r.Post("/api/analytics/run", func(r chi.Router) {
+r.Route("/api/analytics/run", func(r chi.Router) {
     r.Use(ratelimit.NewBuilder(st).
         WithName("analytics").
         WithHeader("X-User-ID").
         Limit(5, time.Hour))
+    r.Post("/", analyticsHandler)
 })
 ```
 
@@ -424,50 +426,7 @@ import "github.com/nhalm/chikit/validate"
 
 // Limit request body to 1MB
 r.Use(validate.MaxBodySize(1024 * 1024))
-
-// With custom error message
-r.Use(validate.MaxBodySize(1024 * 1024,
-    validate.WithBodySizeMessage("Payload exceeds 1MB limit"),
-))
 ```
-
-### Query Parameter Validation
-
-Validate query parameters with inline rules:
-
-```go
-// Single parameter with validation
-r.Use(validate.QueryParams(
-    validate.Param("limit",
-        validate.WithRequired(),
-        validate.WithDefault("10"),
-        validate.WithValidator(validate.OneOf("10", "25", "50", "100")),
-    ),
-))
-
-// Multiple parameters with different rules
-r.Use(validate.QueryParams(
-    validate.Param("page", validate.WithDefault("1")),
-    validate.Param("search", validate.WithValidator(validate.MinLength(3))),
-    validate.Param("sort", validate.WithValidator(validate.OneOf("name", "date", "price"))),
-))
-
-// Custom validator
-r.Use(validate.QueryParams(
-    validate.Param("id", validate.WithValidator(func(val string) error {
-        if _, err := strconv.Atoi(val); err != nil {
-            return errors.New("must be a number")
-        }
-        return nil
-    })),
-))
-```
-
-Built-in validators:
-- `OneOf(values...)` - Value must be in list
-- `MinLength(n)` - Minimum string length
-- `MaxLength(n)` - Maximum string length
-- `Pattern(pattern)` - Regex pattern match
 
 ### Header Validation
 
@@ -475,38 +434,119 @@ Validate headers with allow/deny lists:
 
 ```go
 // Required header
-r.Use(validate.Headers(
-    validate.Header("X-API-Key", validate.WithRequiredHeader()),
+r.Use(validate.NewHeaders(
+    validate.WithHeader("X-API-Key", validate.WithRequired()),
 ))
 
 // Allow list (only specific values allowed)
-r.Use(validate.Headers(
-    validate.Header("X-Environment",
+r.Use(validate.NewHeaders(
+    validate.WithHeader("X-Environment",
         validate.WithAllowList("production", "staging", "development"),
     ),
 ))
 
 // Deny list (block specific values)
-r.Use(validate.Headers(
-    validate.Header("X-Source",
+r.Use(validate.NewHeaders(
+    validate.WithHeader("X-Source",
         validate.WithDenyList("blocked-client", "banned-user"),
     ),
 ))
 
 // Case-sensitive validation (default: case-insensitive)
-r.Use(validate.Headers(
-    validate.Header("X-Auth-Token",
+r.Use(validate.NewHeaders(
+    validate.WithHeader("X-Auth-Token",
         validate.WithAllowList("Bearer", "Basic"),
         validate.WithCaseSensitive(),
     ),
 ))
 
 // Multiple header rules
-r.Use(validate.Headers(
-    validate.Header("X-API-Key", validate.WithRequiredHeader()),
-    validate.Header("X-Environment", validate.WithAllowList("production", "staging")),
-    validate.Header("X-Source", validate.WithDenyList("blocked")),
+r.Use(validate.NewHeaders(
+    validate.WithHeader("X-API-Key", validate.WithRequired()),
+    validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
+    validate.WithHeader("X-Source", validate.WithDenyList("blocked")),
 ))
+```
+
+## Request Binding
+
+The bind package provides JSON body and query parameter binding with validation using go-playground/validator/v10.
+
+### JSON Binding
+
+```go
+import (
+    "github.com/nhalm/chikit/bind"
+    "github.com/nhalm/chikit/wrapper"
+)
+
+type CreateUserRequest struct {
+    Email string `json:"email" validate:"required,email"`
+    Name  string `json:"name" validate:"required,min=2"`
+    Age   int    `json:"age" validate:"omitempty,min=18"`
+}
+
+func main() {
+    r := chi.NewRouter()
+    r.Use(wrapper.New())
+    r.Use(bind.New())
+
+    r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+        var req CreateUserRequest
+        if !bind.JSON(r, &req) {
+            return  // Validation error already set in wrapper
+        }
+        // Use req.Email, req.Name, req.Age
+        wrapper.SetResponse(r, http.StatusCreated, user)
+    })
+}
+```
+
+### Query Parameter Binding
+
+```go
+type ListUsersQuery struct {
+    Page   int    `query:"page" validate:"omitempty,min=1"`
+    Limit  int    `query:"limit" validate:"omitempty,min=1,max=100"`
+    Search string `query:"search" validate:"omitempty,min=3"`
+}
+
+r.Get("/users", func(w http.ResponseWriter, r *http.Request) {
+    var query ListUsersQuery
+    if !bind.Query(r, &query) {
+        return  // Validation error already set in wrapper
+    }
+    // Use query.Page, query.Limit, query.Search
+})
+```
+
+### Custom Validation Messages
+
+```go
+r.Use(bind.New(bind.WithFormatter(func(field, tag, param string) string {
+    switch tag {
+    case "required":
+        return field + " is required"
+    case "email":
+        return field + " must be a valid email address"
+    case "min":
+        return field + " must be at least " + param
+    default:
+        return field + " is invalid"
+    }
+})))
+```
+
+### Custom Validators
+
+Register custom validation tags at startup:
+
+```go
+func init() {
+    bind.RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
+        return fl.Field().String() == "valid"
+    })
+}
 ```
 
 ## Authentication
@@ -588,7 +628,7 @@ onMetric := func(ctx context.Context, m slo.Metric) {
         m.Method, m.Route, m.StatusCode, m.Duration)
 }
 
-r.Use(slo.Track(onMetric))
+r.Use(slo.New(onMetric))
 ```
 
 ### Prometheus Integration
@@ -635,7 +675,7 @@ func prometheusCallback(ctx context.Context, m slo.Metric) {
     httpRequestsTotal.With(labels).Inc()
 }
 
-r.Use(slo.Track(prometheusCallback))
+r.Use(slo.New(prometheusCallback))
 ```
 
 ### Datadog Integration
@@ -674,7 +714,7 @@ func datadogCallback(client *statsd.Client) func(context.Context, slo.Metric) {
 
 // Usage
 ddClient, _ := statsd.New("127.0.0.1:8125")
-r.Use(slo.Track(datadogCallback(ddClient)))
+r.Use(slo.New(datadogCallback(ddClient)))
 ```
 
 ### OpenTelemetry Integration
@@ -718,7 +758,7 @@ func otelCallback(meter metric.Meter) func(context.Context, slo.Metric) {
 
 // Usage
 meter := otel.Meter("chikit")
-r.Use(slo.Track(otelCallback(meter)))
+r.Use(slo.New(otelCallback(meter)))
 ```
 
 ### Per-Route Tracking
@@ -727,7 +767,7 @@ Track metrics for specific routes only:
 
 ```go
 r.Route("/api/v1", func(r chi.Router) {
-    r.Use(slo.Track(onMetric))  // Track only /api/v1 routes
+    r.Use(slo.New(onMetric))  // Track only /api/v1 routes
     r.Get("/users", listUsers)
     r.Post("/users", createUser)
 })
@@ -745,7 +785,7 @@ onMetric := func(ctx context.Context, m slo.Metric) {
     }
 }
 
-r.Use(slo.Track(onMetric))
+r.Use(slo.New(onMetric))
 ```
 
 ## Complete Example
@@ -763,6 +803,7 @@ import (
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
     "github.com/nhalm/chikit/auth"
+    "github.com/nhalm/chikit/bind"
     "github.com/nhalm/chikit/headers"
     "github.com/nhalm/chikit/ratelimit"
     "github.com/nhalm/chikit/ratelimit/store"
@@ -770,6 +811,11 @@ import (
     "github.com/nhalm/chikit/validate"
     "github.com/nhalm/chikit/wrapper"
 )
+
+type ListUsersQuery struct {
+    Page  int `query:"page" validate:"omitempty,min=1"`
+    Limit int `query:"limit" validate:"omitempty,min=1,max=100"`
+}
 
 func main() {
     r := chi.NewRouter()
@@ -779,22 +825,24 @@ func main() {
     r.Use(middleware.RealIP)
     r.Use(middleware.Logger)
 
-    // Response wrapper - must be outermost (after standard middleware)
-    // Provides structured JSON responses, panic recovery, and error sanitization
-    r.Use(wrapper.Handler())
+    // Wrapper for context-based response handling
+    r.Use(wrapper.New())
+
+    // Bind middleware for request binding/validation
+    r.Use(bind.New())
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
 
     // SLO tracking with callback
-    r.Use(slo.Track(func(ctx context.Context, m slo.Metric) {
+    r.Use(slo.New(func(ctx context.Context, m slo.Metric) {
         log.Printf("method=%s route=%s status=%d duration=%v",
             m.Method, m.Route, m.StatusCode, m.Duration)
     }))
 
     // Validate environment header
-    r.Use(validate.Headers(
-        validate.Header("X-Environment",
+    r.Use(validate.NewHeaders(
+        validate.WithHeader("X-Environment",
             validate.WithAllowList("production", "staging", "development"),
         ),
     ))
@@ -839,12 +887,6 @@ func main() {
             WithHeader("X-Tenant-ID").
             Limit(100, time.Minute))
 
-        // Validate query parameters
-        r.Use(validate.QueryParams(
-            validate.Param("page", validate.WithDefault("1")),
-            validate.Param("limit", validate.WithDefault("25")),
-        ))
-
         r.Get("/users", listUsers)
         r.Post("/users", createUser)
     })
@@ -860,23 +902,36 @@ func validateAPIKey(key string) bool {
 func listUsers(w http.ResponseWriter, r *http.Request) {
     val, ok := headers.FromContext(r.Context(), "tenant_id")
     if !ok {
-        http.Error(w, "No tenant ID", http.StatusBadRequest)
+        wrapper.SetError(r, wrapper.ErrBadRequest.With("No tenant ID"))
         return
     }
     tenantID := val.(uuid.UUID)
+
+    var query ListUsersQuery
+    if !bind.Query(r, &query) {
+        return
+    }
+
     // Query users for tenant...
-    w.Write([]byte("Users for tenant: " + tenantID.String()))
+    wrapper.SetResponse(r, http.StatusOK, map[string]any{
+        "tenant": tenantID.String(),
+        "page":   query.Page,
+        "limit":  query.Limit,
+    })
 }
 
 func createUser(w http.ResponseWriter, r *http.Request) {
     val, ok := headers.FromContext(r.Context(), "tenant_id")
     if !ok {
-        http.Error(w, "No tenant ID", http.StatusBadRequest)
+        wrapper.SetError(r, wrapper.ErrBadRequest.With("No tenant ID"))
         return
     }
     tenantID := val.(uuid.UUID)
+
     // Create user for tenant...
-    w.WriteHeader(http.StatusCreated)
+    wrapper.SetResponse(r, http.StatusCreated, map[string]any{
+        "tenant": tenantID.String(),
+    })
 }
 ```
 

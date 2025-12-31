@@ -2,11 +2,18 @@ package headers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/nhalm/chikit/wrapper"
 )
+
+type errorResponse struct {
+	Error *wrapper.Error `json:"error"`
+}
 
 func TestBasicHeaderExtraction(t *testing.T) {
 	tests := []struct {
@@ -410,4 +417,123 @@ func TestHeaders_ValidatorPanic(t *testing.T) {
 	}()
 
 	handler.ServeHTTP(rr, req)
+}
+
+func TestWrapperIntegration_RequiredHeader(t *testing.T) {
+	tests := []struct {
+		name           string
+		headerVal      string
+		wantStatus     int
+		wantErrCode    string
+		wantErrMessage string
+	}{
+		{
+			name:       "required header present with wrapper",
+			headerVal:  "present",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:           "required header missing with wrapper",
+			headerVal:      "",
+			wantStatus:     http.StatusBadRequest,
+			wantErrCode:    "bad_request",
+			wantErrMessage: "Missing required header: X-Required-Header",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headerMiddleware := New("X-Required-Header", "required_key", WithRequired())
+			handler := wrapper.New()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})))
+
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			if tt.headerVal != "" {
+				req.Header.Set("X-Required-Header", tt.headerVal)
+			}
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rr.Code, tt.wantStatus)
+			}
+
+			if tt.wantErrCode != "" {
+				var errResp errorResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to unmarshal error response: %v", err)
+				}
+				if errResp.Error.Code != tt.wantErrCode {
+					t.Errorf("error code = %s, want %s", errResp.Error.Code, tt.wantErrCode)
+				}
+				if errResp.Error.Message != tt.wantErrMessage {
+					t.Errorf("error message = %s, want %s", errResp.Error.Message, tt.wantErrMessage)
+				}
+			}
+		})
+	}
+}
+
+func TestWrapperIntegration_Validation(t *testing.T) {
+	intValidator := func(val string) (any, error) {
+		if val == "42" {
+			return 42, nil
+		}
+		return nil, errors.New("must be 42")
+	}
+
+	tests := []struct {
+		name           string
+		headerVal      string
+		wantStatus     int
+		wantErrCode    string
+		wantErrMessage string
+	}{
+		{
+			name:       "validation success with wrapper",
+			headerVal:  "42",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:           "validation failure with wrapper",
+			headerVal:      "invalid",
+			wantStatus:     http.StatusBadRequest,
+			wantErrCode:    "bad_request",
+			wantErrMessage: "Invalid X-Validated header: must be 42",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headerMiddleware := New("X-Validated", "validated_key", WithValidator(intValidator))
+			handler := wrapper.New()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})))
+
+			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req.Header.Set("X-Validated", tt.headerVal)
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rr.Code, tt.wantStatus)
+			}
+
+			if tt.wantErrCode != "" {
+				var errResp errorResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &errResp); err != nil {
+					t.Fatalf("failed to unmarshal error response: %v", err)
+				}
+				if errResp.Error.Code != tt.wantErrCode {
+					t.Errorf("error code = %s, want %s", errResp.Error.Code, tt.wantErrCode)
+				}
+				if errResp.Error.Message != tt.wantErrMessage {
+					t.Errorf("error message = %s, want %s", errResp.Error.Message, tt.wantErrMessage)
+				}
+			}
+		})
+	}
 }

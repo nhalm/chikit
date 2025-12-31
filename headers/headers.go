@@ -32,6 +32,8 @@ package headers
 import (
 	"context"
 	"net/http"
+
+	"github.com/nhalm/chikit/wrapper"
 )
 
 type contextKey string
@@ -132,7 +134,11 @@ func New(header, ctxKey string, opts ...Option) func(http.Handler) http.Handler 
 				case h.defaultVal != "":
 					val = h.defaultVal
 				case h.required:
-					http.Error(w, "Missing required header: "+h.header, http.StatusBadRequest)
+					if wrapper.HasState(r.Context()) {
+						wrapper.SetError(r, wrapper.ErrBadRequest.With("Missing required header: "+h.header))
+					} else {
+						http.Error(w, "Missing required header: "+h.header, http.StatusBadRequest)
+					}
 					return
 				default:
 					next.ServeHTTP(w, r)
@@ -145,7 +151,11 @@ func New(header, ctxKey string, opts ...Option) func(http.Handler) http.Handler 
 				var err error
 				contextVal, err = h.validator(val)
 				if err != nil {
-					http.Error(w, "Invalid "+h.header+" header: "+err.Error(), http.StatusBadRequest)
+					if wrapper.HasState(r.Context()) {
+						wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid "+h.header+" header: "+err.Error()))
+					} else {
+						http.Error(w, "Invalid "+h.header+" header: "+err.Error(), http.StatusBadRequest)
+					}
 					return
 				}
 			}

@@ -11,12 +11,12 @@
 //		prometheus.ObserveLatency(m.Method, m.Route, m.StatusCode, m.Duration)
 //		prometheus.IncRequestCounter(m.Method, m.Route, m.StatusCode)
 //	}
-//	r.Use(slo.Track(onMetric))
+//	r.Use(slo.New(onMetric))
 //
 // Per-route tracking:
 //
 //	r.Route("/api/v1", func(r chi.Router) {
-//		r.Use(slo.Track(onMetric))
+//		r.Use(slo.New(onMetric))
 //		r.Get("/users", listUsers)
 //	})
 //
@@ -26,8 +26,12 @@
 package slo
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -50,7 +54,14 @@ type Metric struct {
 	Duration time.Duration
 }
 
-// Track returns middleware that emits metrics for each request via callback.
+// Option configures the SLO tracking middleware.
+type Option func(*config)
+
+type config struct {
+	onMetric func(context.Context, Metric)
+}
+
+// New returns middleware that emits metrics for each request via callback.
 // The callback receives the request context and structured metric data after
 // the request completes. This design allows integration with any observability
 // system without forcing specific client libraries.
@@ -85,16 +96,22 @@ type Metric struct {
 //		requestDuration.With(labels).Observe(m.Duration.Seconds())
 //		requestsTotal.With(labels).Inc()
 //	}
-//	r.Use(slo.Track(onMetric))
-func Track(onMetric func(context.Context, Metric)) func(http.Handler) http.Handler {
+//	r.Use(slo.New(onMetric))
+func New(onMetric func(context.Context, Metric), opts ...Option) func(http.Handler) http.Handler {
+	cfg := &config{onMetric: onMetric}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			rw := &responseWriter{ResponseWriter: w}
+			rw.statusCode.Store(http.StatusOK)
 
 			defer func() {
 				if err := recover(); err != nil {
-					rw.statusCode = http.StatusInternalServerError
+					rw.statusCode.Store(http.StatusInternalServerError)
 
 					route := r.URL.Path
 					if rctx := chi.RouteContext(r.Context()); rctx != nil {
@@ -106,11 +123,11 @@ func Track(onMetric func(context.Context, Metric)) func(http.Handler) http.Handl
 					metric := Metric{
 						Method:     r.Method,
 						Route:      route,
-						StatusCode: rw.statusCode,
+						StatusCode: int(rw.statusCode.Load()),
 						Duration:   time.Since(start),
 					}
 
-					onMetric(r.Context(), metric)
+					cfg.onMetric(r.Context(), metric)
 					panic(err)
 				}
 			}()
@@ -127,21 +144,51 @@ func Track(onMetric func(context.Context, Metric)) func(http.Handler) http.Handl
 			metric := Metric{
 				Method:     r.Method,
 				Route:      route,
-				StatusCode: rw.statusCode,
+				StatusCode: int(rw.statusCode.Load()),
 				Duration:   time.Since(start),
 			}
 
-			onMetric(r.Context(), metric)
+			cfg.onMetric(r.Context(), metric)
 		})
 	}
 }
 
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  atomic.Int32
+	wroteHeader atomic.Bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
+	if rw.wroteHeader.CompareAndSwap(false, true) {
+		rw.statusCode.Store(int32(code))
+		rw.ResponseWriter.WriteHeader(code)
+	}
 }
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if rw.wroteHeader.CompareAndSwap(false, true) {
+		rw.statusCode.Store(http.StatusOK)
+		rw.ResponseWriter.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("hijacking not supported")
+}
+
+// Compile-time interface checks
+var (
+	_ http.Flusher  = (*responseWriter)(nil)
+	_ http.Hijacker = (*responseWriter)(nil)
+)
