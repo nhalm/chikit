@@ -6,6 +6,8 @@
 //   - Stripe-style structured errors with type, code, message, and field errors
 //   - Response interception and modification by outer middleware
 //   - Panic recovery with safe error responses
+//   - Optional canonical logging via canonlog integration
+//   - Optional SLO tracking with PASS/FAIL status
 //
 // Basic usage:
 //
@@ -20,14 +22,32 @@
 //	    }
 //	    wrapper.SetResponse(r, http.StatusCreated, user)
 //	})
+//
+// With canonical logging and SLO tracking:
+//
+//	r.Use(wrapper.New(
+//	    wrapper.WithCanonlog(),
+//	    wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+//	        return map[string]any{"request_id": r.Header.Get("X-Request-ID")}
+//	    }),
+//	    wrapper.WithSLOs(),
+//	))
+//
+//	r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
 package wrapper
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/nhalm/canonlog"
+	"github.com/nhalm/chikit/slo"
 )
 
 type contextKey string
@@ -207,9 +227,40 @@ func getState(ctx context.Context) *State {
 // Option configures the wrapper middleware.
 type Option func(*config)
 
-// config holds configuration for the wrapper middleware.
-// Currently empty but supports future options without breaking changes.
-type config struct{}
+type config struct {
+	canonlog       bool
+	canonlogFields func(*http.Request) map[string]any
+	slosEnabled    bool
+}
+
+// WithCanonlog enables canonical logging for requests.
+// Creates a logger at request start and flushes it after response.
+// Logs method, path, route, status, and duration_ms for each request.
+// Errors set via SetError are automatically logged.
+func WithCanonlog() Option {
+	return func(c *config) {
+		c.canonlog = true
+	}
+}
+
+// WithCanonlogFields adds custom fields to each log entry.
+// The function receives the request and returns fields to add.
+// Called at request start, before the handler executes.
+func WithCanonlogFields(fn func(*http.Request) map[string]any) Option {
+	return func(c *config) {
+		c.canonlogFields = fn
+	}
+}
+
+// WithSLOs enables SLO status logging.
+// Requires WithCanonlog() to be enabled.
+// Reads SLO tier and target from context (set via slo.Track or slo.TrackWithTarget)
+// and logs slo_class and slo_status (PASS or FAIL) based on request duration.
+func WithSLOs() Option {
+	return func(c *config) {
+		c.slosEnabled = true
+	}
+}
 
 // New returns middleware that manages response state and writes responses.
 func New(opts ...Option) func(http.Handler) http.Handler {
@@ -222,6 +273,22 @@ func New(opts ...Option) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			state := &State{}
 			ctx := context.WithValue(r.Context(), stateKey, state)
+
+			var start time.Time
+			if cfg.canonlog {
+				ctx = canonlog.NewContext(ctx)
+				start = time.Now()
+
+				canonlog.InfoAddMany(ctx, map[string]any{
+					"method": r.Method,
+					"path":   r.URL.Path,
+				})
+
+				if cfg.canonlogFields != nil {
+					canonlog.InfoAddMany(ctx, cfg.canonlogFields(r))
+				}
+			}
+
 			r = r.WithContext(ctx)
 
 			defer func() {
@@ -229,7 +296,50 @@ func New(opts ...Option) func(http.Handler) http.Handler {
 					state.mu.Lock()
 					state.err = ErrInternal
 					state.mu.Unlock()
+
+					if cfg.canonlog {
+						canonlog.ErrorAdd(ctx, fmt.Errorf("panic: %v", rec))
+					}
 				}
+
+				if cfg.canonlog {
+					state.mu.Lock()
+					status := state.status
+					if state.err != nil {
+						status = state.err.Status
+						canonlog.ErrorAdd(ctx, state.err)
+					}
+					state.mu.Unlock()
+
+					duration := time.Since(start)
+
+					route := r.URL.Path
+					if rctx := chi.RouteContext(ctx); rctx != nil {
+						if pattern := rctx.RoutePattern(); pattern != "" {
+							route = pattern
+						}
+					}
+
+					canonlog.InfoAddMany(ctx, map[string]any{
+						"route":       route,
+						"status":      status,
+						"duration_ms": duration.Milliseconds(),
+					})
+
+					if cfg.slosEnabled {
+						if tier, target, ok := slo.GetTier(ctx); ok {
+							sloStatus := "PASS"
+							if duration > target {
+								sloStatus = "FAIL"
+							}
+							canonlog.InfoAdd(ctx, "slo_class", string(tier))
+							canonlog.InfoAdd(ctx, "slo_status", sloStatus)
+						}
+					}
+
+					canonlog.Flush(ctx)
+				}
+
 				writeResponse(w, state)
 			}()
 
