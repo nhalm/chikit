@@ -527,3 +527,37 @@ func TestQuery_IntegerOverflow(t *testing.T) {
 		t.Errorf("expected status 400 for integer overflow, got %d", rec.Code)
 	}
 }
+
+func TestJSON_BodyTooLarge(t *testing.T) {
+	handler := wrapper.New()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 10)
+
+		var req CreateUserRequest
+		if !bind.JSON(r, &req) {
+			return
+		}
+		wrapper.SetResponse(r, http.StatusOK, req)
+	}))
+
+	body := `{"email": "test@example.com", "age": 25}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected status 413, got %d", rec.Code)
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp["error"].Code != "payload_too_large" {
+		t.Errorf("expected code payload_too_large, got %s", resp["error"].Code)
+	}
+	if resp["error"].Message != "Request body too large" {
+		t.Errorf("expected message 'Request body too large', got %s", resp["error"].Message)
+	}
+}
