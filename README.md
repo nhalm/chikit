@@ -62,12 +62,18 @@ Errors follow Stripe's API error format:
 // Predefined sentinel errors
 wrapper.ErrBadRequest          // 400
 wrapper.ErrUnauthorized        // 401
+wrapper.ErrPaymentRequired     // 402
 wrapper.ErrForbidden           // 403
 wrapper.ErrNotFound            // 404
+wrapper.ErrMethodNotAllowed    // 405
 wrapper.ErrConflict            // 409
+wrapper.ErrGone                // 410
+wrapper.ErrPayloadTooLarge     // 413
 wrapper.ErrUnprocessableEntity // 422
 wrapper.ErrRateLimited         // 429
 wrapper.ErrInternal            // 500
+wrapper.ErrNotImplemented      // 501
+wrapper.ErrServiceUnavailable  // 503
 
 // Customize message
 wrapper.SetError(r, wrapper.ErrNotFound.With("User not found"))

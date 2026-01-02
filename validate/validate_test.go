@@ -35,6 +35,60 @@ func TestMaxBodySize_WithinLimit(t *testing.T) {
 }
 
 func TestMaxBodySize_ExceedsLimit(t *testing.T) {
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.Write([]byte("ok"))
+	})
+
+	body := bytes.NewBufferString(strings.Repeat("x", 2000))
+	req := httptest.NewRequest("POST", "/", body)
+	req.ContentLength = 2000
+	rec := httptest.NewRecorder()
+
+	middleware := validate.MaxBodySize(1024)
+	middleware(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected status 413, got %d", rec.Code)
+	}
+	if handlerCalled {
+		t.Error("handler should not be called when Content-Length exceeds limit")
+	}
+}
+
+func TestMaxBodySize_ExceedsLimit_WithWrapper(t *testing.T) {
+	handlerCalled := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.Write([]byte("ok"))
+	})
+
+	body := bytes.NewBufferString(strings.Repeat("x", 2000))
+	req := httptest.NewRequest("POST", "/", body)
+	req.ContentLength = 2000
+	rec := httptest.NewRecorder()
+
+	chain := wrapper.New()(validate.MaxBodySize(1024)(handler))
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected status 413, got %d", rec.Code)
+	}
+	if handlerCalled {
+		t.Error("handler should not be called when Content-Length exceeds limit")
+	}
+
+	var resp map[string]wrapper.Error
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"].Code != "payload_too_large" {
+		t.Errorf("expected code payload_too_large, got %s", resp["error"].Code)
+	}
+}
+
+func TestMaxBodySize_ChunkedTransfer_ExceedsLimit(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)
 		if err != nil {
