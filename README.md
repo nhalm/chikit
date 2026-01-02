@@ -471,6 +471,8 @@ import "github.com/nhalm/chikit/validate"
 r.Use(validate.MaxBodySize(1024 * 1024))
 ```
 
+The middleware checks `Content-Length` upfront and returns 413 (Request Entity Too Large) before the handler runs. For chunked transfers (no Content-Length), the limit is enforced when the body is read - `bind.JSON` automatically returns `ErrPayloadTooLarge` in this case.
+
 ### Header Validation
 
 Validate headers with allow/deny lists:
