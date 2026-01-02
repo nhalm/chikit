@@ -769,6 +769,11 @@ type ListUsersQuery struct {
     Limit int `query:"limit" validate:"omitempty,min=1,max=100"`
 }
 
+type CreateUserRequest struct {
+    Email string `json:"email" validate:"required,email"`
+    Name  string `json:"name" validate:"required,min=2"`
+}
+
 func main() {
     // Setup canonical logging
     canonlog.SetupGlobalLogger("info", "json")
@@ -897,9 +902,15 @@ func createUser(w http.ResponseWriter, r *http.Request) {
     }
     tenantID := val.(uuid.UUID)
 
+    var req CreateUserRequest
+    if !bind.JSON(r, &req) {
+        return // Returns 400 for validation errors, 413 if body exceeds MaxBodySize limit
+    }
+
     // Create user for tenant...
     wrapper.SetResponse(r, http.StatusCreated, map[string]any{
         "tenant": tenantID.String(),
+        "email":  req.Email,
     })
 }
 
