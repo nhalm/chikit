@@ -28,6 +28,7 @@ package bind
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -130,12 +131,18 @@ func defaultFormatter(_, tag, param string) string {
 // JSON decodes request body into dest and validates it.
 // Returns true if binding and validation succeeded, false otherwise.
 // When validation fails, an error is set in the wrapper context (if available).
+// If the request body exceeds MaxBodySize limits, ErrPayloadTooLarge is returned.
 func JSON(r *http.Request, dest any) bool {
 	ctx := r.Context()
 
 	if err := json.NewDecoder(r.Body).Decode(dest); err != nil {
 		if wrapper.HasState(ctx) {
-			wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid JSON request body"))
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				wrapper.SetError(r, wrapper.ErrPayloadTooLarge.With("Request body too large"))
+			} else {
+				wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid JSON request body"))
+			}
 		}
 		return false
 	}
