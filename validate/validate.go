@@ -1,9 +1,8 @@
 // Package validate provides middleware for request validation.
 //
 // The package offers validation for headers and request body size.
-// All validation middleware returns 400 (Bad Request) for validation failures.
-// MaxBodySize wraps the request body with http.MaxBytesReader; downstream handlers
-// must check for errors when reading the body to detect size limit violations.
+// All validation middleware returns structured errors via wrapper if available,
+// or standard HTTP errors otherwise.
 //
 // Header validation:
 //
@@ -32,70 +31,17 @@ type bodySizeConfig struct {
 // BodySizeOption configures MaxBodySize middleware.
 type BodySizeOption func(*bodySizeConfig)
 
-// MaxBodySize returns middleware that limits request body size using http.MaxBytesReader.
+// MaxBodySize returns middleware that limits request body size.
 //
-// IMPORTANT: This middleware ONLY wraps the request body - it does NOT automatically
-// detect or return error responses. The body size limit is enforced only when the body
-// is read by your handler. Handlers MUST check for *http.MaxBytesError when reading
-// the body to properly handle size violations.
+// The middleware checks Content-Length header upfront and rejects requests that exceed
+// the limit before the handler runs. It also wraps the body with http.MaxBytesReader
+// as a secondary protection for chunked transfers or missing Content-Length headers.
 //
-// How it works:
-//  1. This middleware wraps r.Body with http.MaxBytesReader before calling the next handler
-//  2. The wrapped body reader tracks bytes read and returns an error if the limit is exceeded
-//  3. Your handler must read the body (e.g., via io.ReadAll or json.Decoder) to trigger the check
-//  4. Your handler must check for *http.MaxBytesError to detect size violations
+// Returns 413 (Request Entity Too Large) when the limit is exceeded.
 //
 // Basic usage:
 //
 //	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
-//
-// Handler example with proper error handling:
-//
-//	func handler(w http.ResponseWriter, r *http.Request) {
-//		body, err := io.ReadAll(r.Body)
-//		if err != nil {
-//			var maxBytesErr *http.MaxBytesError
-//			if errors.As(err, &maxBytesErr) {
-//				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
-//				return
-//			}
-//			http.Error(w, "Failed to read body", http.StatusInternalServerError)
-//			return
-//		}
-//		// Process body...
-//	}
-//
-// With wrapper middleware (recommended):
-//
-//	func handler(w http.ResponseWriter, r *http.Request) {
-//		body, err := io.ReadAll(r.Body)
-//		if err != nil {
-//			var maxBytesErr *http.MaxBytesError
-//			if errors.As(err, &maxBytesErr) {
-//				wrapper.SetError(r, wrapper.ErrUnprocessableEntity.With("Request body exceeds maximum size"))
-//				return
-//			}
-//			wrapper.SetError(r, wrapper.ErrInternal.With("Failed to read request body"))
-//			return
-//		}
-//		// Process body...
-//	}
-//
-// With JSON decoding:
-//
-//	func handler(w http.ResponseWriter, r *http.Request) {
-//		var req MyRequest
-//		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-//			var maxBytesErr *http.MaxBytesError
-//			if errors.As(err, &maxBytesErr) {
-//				wrapper.SetError(r, wrapper.ErrUnprocessableEntity.With("Request body too large"))
-//				return
-//			}
-//			wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid JSON"))
-//			return
-//		}
-//		// Process req...
-//	}
 func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http.Handler {
 	cfg := &bodySizeConfig{
 		maxBytes: maxBytes,
@@ -106,6 +52,15 @@ func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ContentLength > cfg.maxBytes {
+				if wrapper.HasState(r.Context()) {
+					wrapper.SetError(r, wrapper.ErrPayloadTooLarge.With("Request body too large"))
+				} else {
+					http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				}
+				return
+			}
+
 			r.Body = http.MaxBytesReader(w, r.Body, cfg.maxBytes)
 			next.ServeHTTP(w, r)
 		})
