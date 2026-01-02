@@ -131,7 +131,10 @@ func defaultFormatter(_, tag, param string) string {
 // JSON decodes request body into dest and validates it.
 // Returns true if binding and validation succeeded, false otherwise.
 // When validation fails, an error is set in the wrapper context (if available).
-// If the request body exceeds MaxBodySize limits, ErrPayloadTooLarge is returned.
+//
+// Body size limits: If validate.MaxBodySize middleware is active, requests exceeding
+// the limit during decode return ErrPayloadTooLarge (413). This handles chunked
+// transfers and requests with missing/incorrect Content-Length headers.
 func JSON(r *http.Request, dest any) bool {
 	ctx := r.Context()
 
