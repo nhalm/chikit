@@ -33,9 +33,21 @@ type BodySizeOption func(*bodySizeConfig)
 
 // MaxBodySize returns middleware that limits request body size.
 //
-// The middleware checks Content-Length header upfront and rejects requests that exceed
-// the limit before the handler runs. It also wraps the body with http.MaxBytesReader
-// as a secondary protection for chunked transfers or missing Content-Length headers.
+// The middleware provides two-stage protection:
+//  1. Content-Length check: Requests with Content-Length exceeding the limit are
+//     rejected with 413 immediately, before the handler runs
+//  2. MaxBytesReader wrapper: All request bodies are wrapped with http.MaxBytesReader
+//     as defense-in-depth, catching chunked transfers and missing/incorrect Content-Length
+//
+// When used with bind.JSON, the second stage is automatic:
+//
+//	r.Use(validate.MaxBodySize(1024 * 1024))
+//	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+//	    var req CreateUserRequest
+//	    if !bind.JSON(r, &req) {
+//	        return // Returns 413 if body exceeds limit during decode
+//	    }
+//	})
 //
 // Returns 413 (Request Entity Too Large) when the limit is exceeded.
 //
