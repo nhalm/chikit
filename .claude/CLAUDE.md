@@ -51,9 +51,18 @@ wrapper.SetError(r, wrapper.ErrBadRequest.WithParam("Invalid format", "email"))
 
 ### Rate Limiting
 
-Two APIs:
-- **Simple**: `ratelimit.ByIP()`, `ratelimit.ByHeader()`, `ratelimit.ByEndpoint()`
-- **Builder**: `ratelimit.NewBuilder(store).WithIP().WithHeader("X-Tenant").Limit(100, time.Minute)`
+```go
+// Single dimension
+limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithIP())
+
+// Multi-dimensional with required/optional
+limiter := ratelimit.New(st, 100, time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeader("X-Tenant-ID", true),   // required=true: 400 if missing
+    ratelimit.WithQueryParam("user_id", false),  // required=false: skip if missing
+)
+r.Use(limiter.Handler)
+```
 
 Use `WithName()` for layered rate limiting to avoid key collisions.
 

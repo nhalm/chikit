@@ -16,7 +16,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
 - **Request Binding**: JSON body and query parameter binding with validation
 - **Authentication**: API key and bearer token validation with custom validators
-- **SLO Tracking**: Callback-based metrics for latency, traffic, and errors
+- **SLO Tracking**: Per-route SLO classification with PASS/FAIL logging via canonlog
 - **Zero Config Files**: Pure code configuration - no config files or environment variables
 - **Distributed-Ready**: Redis backend for Kubernetes deployments
 - **Fluent API**: Chainable, readable middleware configuration
@@ -62,12 +62,18 @@ Errors follow Stripe's API error format:
 // Predefined sentinel errors
 wrapper.ErrBadRequest          // 400
 wrapper.ErrUnauthorized        // 401
+wrapper.ErrPaymentRequired     // 402
 wrapper.ErrForbidden           // 403
 wrapper.ErrNotFound            // 404
+wrapper.ErrMethodNotAllowed    // 405
 wrapper.ErrConflict            // 409
+wrapper.ErrGone                // 410
+wrapper.ErrPayloadTooLarge     // 413
 wrapper.ErrUnprocessableEntity // 422
 wrapper.ErrRateLimited         // 429
 wrapper.ErrInternal            // 500
+wrapper.ErrNotImplemented      // 501
+wrapper.ErrServiceUnavailable  // 503
 
 // Customize message
 wrapper.SetError(r, wrapper.ErrNotFound.With("User not found"))
@@ -156,11 +162,46 @@ r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
+### Canonical Logging
+
+Integrate with [canonlog](https://github.com/nhalm/canonlog) for structured request logging:
+
+```go
+import "github.com/nhalm/canonlog"
+
+func main() {
+    canonlog.SetupGlobalLogger("info", "json")
+
+    r := chi.NewRouter()
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+            return map[string]any{
+                "request_id": r.Header.Get("X-Request-ID"),
+                "tenant_id":  r.Header.Get("X-Tenant-ID"),
+            }
+        }),
+    ))
+}
+```
+
+This automatically logs for each request:
+- `method`, `path`, `route` (Chi route pattern)
+- `status`, `duration_ms`
+- `errors` array (when errors occur)
+
+Output:
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":45,"request_id":"abc-123"}
+```
+
+### SLO Integration
+
+Enable SLO status logging with `WithSLOs()`. See [SLO Tracking](#slo-tracking) for details.
+
 ## Rate Limiting
 
-### Simple API
-
-For common use cases, use the simple API:
+### Basic Usage
 
 ```go
 import (
@@ -177,78 +218,88 @@ func main() {
     st := store.NewMemory()
     defer st.Close()
 
-    // Rate limit by IP: 10 requests per minute
-    r.Use(ratelimit.ByIP(st, 10, time.Minute))
+    // Rate limit by IP: 100 requests per minute
+    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithIP()).Handler)
 
-    // Rate limit by header: 1000 requests per hour
-    r.Use(ratelimit.ByHeader(st, "X-API-Key", 1000, time.Hour))
+    // Rate limit by header (skip rate limiting if header missing)
+    r.Use(ratelimit.New(st, 1000, 1*time.Hour, ratelimit.WithHeader("X-API-Key", false)).Handler)
 
-    // Rate limit by endpoint: 100 requests per minute
-    r.Use(ratelimit.ByEndpoint(st, 100, time.Minute))
-
-    // Rate limit by query parameter
-    r.Use(ratelimit.ByQueryParam(st, "user_id", 50, time.Minute))
+    // Rate limit by endpoint
+    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithEndpoint()).Handler)
 }
 ```
 
-### Fluent Builder API
+### Multi-Dimensional Rate Limiting
 
-For complex multi-dimensional rate limiting:
+Combine multiple key dimensions for fine-grained control:
 
 ```go
 // Rate limit by IP + endpoint combination
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithEndpoint().
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+)
+r.Use(limiter.Handler)
 
-// Rate limit by IP + tenant header
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeader("X-Tenant-ID").
-    Limit(1000, time.Hour))
+// Rate limit by IP + tenant header (reject if header missing)
+limiter := ratelimit.New(st, 1000, 1*time.Hour,
+    ratelimit.WithIP(),
+    ratelimit.WithHeader("X-Tenant-ID", true),
+)
+r.Use(limiter.Handler)
 
 // Complex multi-dimensional rate limiting
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithEndpoint().
-    WithHeader("X-API-Key").
-    WithQueryParam("user_id").
-    Limit(50, time.Minute))
+limiter := ratelimit.New(st, 50, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+    ratelimit.WithHeader("X-API-Key", true),
+    ratelimit.WithQueryParam("user_id", false),
+)
+r.Use(limiter.Handler)
 ```
+
+### Key Dimension Options
+
+| Option | Description |
+|--------|-------------|
+| `WithIP()` | Client IP from RemoteAddr (direct connections) |
+| `WithRealIP(required)` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
+| `WithEndpoint()` | HTTP method + path (e.g., `GET:/api/users`) |
+| `WithHeader(name, required)` | Header value |
+| `WithQueryParam(name, required)` | Query parameter value |
+| `WithName(name)` | Key prefix for collision prevention |
+
+The `required` parameter controls behavior when the value is missing:
+- `required=true`: Returns 400 Bad Request if the value is missing
+- `required=false`: Skips rate limiting for that request if the value is missing
 
 ### Redis Backend (Production)
 
 For distributed deployments:
 
 ```go
-import "github.com/nhalm/chikit/ratelimit/store"
+import (
+    "log"
+    "time"
 
-st, err := store.NewRedis(store.RedisConfig{
-    URL:      "redis.default.svc.cluster.local:6379",
-    Password: "your-password",
-    DB:       0,
-    Prefix:   "ratelimit:",
-})
-if err != nil {
-    log.Fatal(err)
+    "github.com/go-chi/chi/v5"
+    "github.com/nhalm/chikit/ratelimit"
+    "github.com/nhalm/chikit/ratelimit/store"
+)
+
+func main() {
+    st, err := store.NewRedis(store.RedisConfig{
+        URL:    "redis:6379",
+        Prefix: "rl:",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer st.Close()
+
+    r := chi.NewRouter()
+    r.Use(ratelimit.New(st, 100, time.Minute, ratelimit.WithIP()).Handler)
 }
-defer st.Close()
-```
-
-### Custom Key Functions
-
-Build your own rate limiting logic:
-
-```go
-keyFn := func(r *http.Request) string {
-    // Extract user ID from JWT or context
-    userID := getUserIDFromToken(r)
-    return fmt.Sprintf("user:%s:%s", userID, r.URL.Path)
-}
-
-limiter := ratelimit.New(st, 100, time.Minute, keyFn)
-r.Use(limiter.Handler)
 ```
 
 ### Rate Limit Headers
@@ -262,26 +313,26 @@ RateLimit-Reset: 1735401600
 Retry-After: 60
 ```
 
-Header behavior can be configured using the Builder API:
+Header behavior can be configured:
 
 ```go
 // Always include headers (default)
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersAlways).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersAlways),
+)
 
 // Include headers only on 429 responses
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersOnLimitExceeded).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersOnLimitExceeded),
+)
 
 // Never include headers
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersNever).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersNever),
+)
 ```
 
 ### Layered Rate Limiting
@@ -293,21 +344,21 @@ st := store.NewMemory()
 defer st.Close()
 
 // Global limit: 1000 requests per hour per IP
-globalLimiter := ratelimit.NewBuilder(st).
-    WithName("global").
-    WithIP().
-    Limit(1000, time.Hour)
+globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
+    ratelimit.WithName("global"),
+    ratelimit.WithIP(),
+)
 
 // Endpoint-specific limit: 10 requests per minute per IP+endpoint
-endpointLimiter := ratelimit.NewBuilder(st).
-    WithName("endpoint").
-    WithIP().
-    WithEndpoint().
-    Limit(10, time.Minute)
+endpointLimiter := ratelimit.New(st, 10, 1*time.Minute,
+    ratelimit.WithName("endpoint"),
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+)
 
 // Apply both limiters
-r.Use(globalLimiter)
-r.Use(endpointLimiter)
+r.Use(globalLimiter.Handler)
+r.Use(endpointLimiter.Handler)
 ```
 
 Without `WithName()`, the keys would collide because both limiters use `WithIP()`. The name is prepended to the key:
@@ -325,26 +376,29 @@ This pattern is useful for implementing tiered rate limits:
 
 ```go
 // Tier 1: Broad protection (DDoS prevention)
-r.Use(ratelimit.NewBuilder(st).
-    WithName("ddos").
-    WithIP().
-    Limit(10000, time.Hour))
+ddosLimiter := ratelimit.New(st, 10000, 1*time.Hour,
+    ratelimit.WithName("ddos"),
+    ratelimit.WithIP(),
+)
+r.Use(ddosLimiter.Handler)
 
 // Tier 2: API endpoint protection
 r.Route("/api", func(r chi.Router) {
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("api").
-        WithIP().
-        WithEndpoint().
-        Limit(100, time.Minute))
+    apiLimiter := ratelimit.New(st, 100, 1*time.Minute,
+        ratelimit.WithName("api"),
+        ratelimit.WithIP(),
+        ratelimit.WithEndpoint(),
+    )
+    r.Use(apiLimiter.Handler)
 })
 
 // Tier 3: Expensive operation protection
 r.Route("/api/analytics/run", func(r chi.Router) {
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("analytics").
-        WithHeader("X-User-ID").
-        Limit(5, time.Hour))
+    analyticsLimiter := ratelimit.New(st, 5, 1*time.Hour,
+        ratelimit.WithName("analytics"),
+        ratelimit.WithHeader("X-User-ID", true),
+    )
+    r.Use(analyticsLimiter.Handler)
     r.Post("/", analyticsHandler)
 })
 ```
@@ -427,6 +481,13 @@ import "github.com/nhalm/chikit/validate"
 // Limit request body to 1MB
 r.Use(validate.MaxBodySize(1024 * 1024))
 ```
+
+The middleware provides two-stage protection:
+
+1. **Content-Length check**: Requests with `Content-Length` exceeding the limit are rejected with 413 immediately, before the handler runs
+2. **MaxBytesReader wrapper**: All request bodies are wrapped with `http.MaxBytesReader` as defense-in-depth, catching chunked transfers and requests with missing/incorrect Content-Length headers
+
+When using `bind.JSON`, the second stage is automatic - if the body exceeds the limit during decoding, `bind.JSON` detects the error and returns `wrapper.ErrPayloadTooLarge` (413).
 
 ### Header Validation
 
@@ -607,185 +668,87 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 ## SLO Tracking
 
-Track service level objectives with callback-based metrics. The middleware captures request metrics and calls your callback function, allowing integration with any observability system without forcing specific client libraries.
+Track service level objectives with per-route SLO classification. The SLO package sets tier and target in request context, and the wrapper middleware logs PASS/FAIL status via canonlog.
+
+### Predefined Tiers
+
+| Tier | Target | Use Case |
+|------|--------|----------|
+| `Critical` | 50ms | Essential functions (99.99% availability) |
+| `HighFast` | 100ms | User-facing requests requiring quick responses |
+| `HighSlow` | 1000ms | Important requests tolerating higher latency |
+| `Low` | 5000ms | Background tasks, non-interactive functions |
 
 ### Basic Usage
 
 ```go
 import (
-    "context"
+    "github.com/nhalm/canonlog"
     "github.com/nhalm/chikit/slo"
+    "github.com/nhalm/chikit/wrapper"
 )
 
-// Define callback to handle metrics
-onMetric := func(ctx context.Context, m slo.Metric) {
-    // m.Method: HTTP method (GET, POST, etc.)
-    // m.Route: Chi route pattern ("/api/users/{id}")
-    // m.StatusCode: HTTP status code
-    // m.Duration: Request processing time
+func main() {
+    canonlog.SetupGlobalLogger("info", "json")
 
-    log.Printf("method=%s route=%s status=%d duration=%v",
-        m.Method, m.Route, m.StatusCode, m.Duration)
+    r := chi.NewRouter()
+
+    // Enable canonlog and SLO logging
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithSLOs(),
+    ))
+
+    // Set SLO tier per route
+    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
+    r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
+    r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
+    r.With(slo.Track(slo.Low)).Post("/batch", batchProcess)
 }
-
-r.Use(slo.New(onMetric))
 ```
 
-### Prometheus Integration
+### Custom Targets
 
-Example showing how to adapt the callback for Prometheus (prometheus/client_golang is not a dependency):
+For routes that don't fit predefined tiers:
 
 ```go
-import (
-    "context"
-    "strconv"
-
-    "github.com/nhalm/chikit/slo"
-    "github.com/prometheus/client_golang/prometheus"
-    "github.com/prometheus/client_golang/prometheus/promauto"
-)
-
-var (
-    httpDuration = promauto.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name: "http_request_duration_seconds",
-            Help: "HTTP request latency in seconds",
-            Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-        },
-        []string{"method", "route", "status"},
-    )
-
-    httpRequestsTotal = promauto.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "http_requests_total",
-            Help: "Total number of HTTP requests",
-        },
-        []string{"method", "route", "status"},
-    )
-)
-
-func prometheusCallback(ctx context.Context, m slo.Metric) {
-    labels := prometheus.Labels{
-        "method": m.Method,
-        "route":  m.Route,
-        "status": strconv.Itoa(m.StatusCode),
-    }
-
-    httpDuration.With(labels).Observe(m.Duration.Seconds())
-    httpRequestsTotal.With(labels).Inc()
-}
-
-r.Use(slo.New(prometheusCallback))
+r.With(slo.TrackWithTarget(200 * time.Millisecond)).Get("/custom", handler)
 ```
 
-### Datadog Integration
+Custom targets are logged with `slo_class: "custom"`.
 
-Example showing how to adapt the callback for Datadog (DataDog/datadog-go is not a dependency):
+### Log Output
 
-```go
-import (
-    "context"
-    "fmt"
-
-    "github.com/DataDog/datadog-go/v5/statsd"
-    "github.com/nhalm/chikit/slo"
-)
-
-func datadogCallback(client *statsd.Client) func(context.Context, slo.Metric) {
-    return func(ctx context.Context, m slo.Metric) {
-        tags := []string{
-            fmt.Sprintf("method:%s", m.Method),
-            fmt.Sprintf("route:%s", m.Route),
-            fmt.Sprintf("status:%d", m.StatusCode),
-        }
-
-        // Send timing metric
-        client.Timing("http.request.duration", m.Duration, tags, 1.0)
-
-        // Increment request counter
-        client.Incr("http.request.count", tags, 1.0)
-
-        // Track errors
-        if m.StatusCode >= 500 {
-            client.Incr("http.request.errors", tags, 1.0)
-        }
-    }
-}
-
-// Usage
-ddClient, _ := statsd.New("127.0.0.1:8125")
-r.Use(slo.New(datadogCallback(ddClient)))
+Success (within target):
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":45,"slo_class":"high_fast","slo_status":"PASS"}
 ```
 
-### OpenTelemetry Integration
-
-Example showing how to adapt the callback for OpenTelemetry:
-
-```go
-import (
-    "context"
-    "strconv"
-
-    "github.com/nhalm/chikit/slo"
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/metric"
-)
-
-func otelCallback(meter metric.Meter) func(context.Context, slo.Metric) {
-    histogram, _ := meter.Float64Histogram(
-        "http.server.request.duration",
-        metric.WithUnit("s"),
-        metric.WithDescription("HTTP request duration"),
-    )
-
-    counter, _ := meter.Int64Counter(
-        "http.server.request.count",
-        metric.WithDescription("Total HTTP requests"),
-    )
-
-    return func(ctx context.Context, m slo.Metric) {
-        attrs := []attribute.KeyValue{
-            attribute.String("http.method", m.Method),
-            attribute.String("http.route", m.Route),
-            attribute.Int("http.status_code", m.StatusCode),
-        }
-
-        histogram.Record(ctx, m.Duration.Seconds(), metric.WithAttributes(attrs...))
-        counter.Add(ctx, 1, metric.WithAttributes(attrs...))
-    }
-}
-
-// Usage
-meter := otel.Meter("chikit")
-r.Use(slo.New(otelCallback(meter)))
+SLO breach (exceeded target):
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/users/123","route":"/users/{id}","status":200,"duration_ms":150,"slo_class":"high_fast","slo_status":"FAIL"}
 ```
 
-### Per-Route Tracking
+### Alerting
 
-Track metrics for specific routes only:
+Use your log aggregator to create alerts based on SLO status:
 
-```go
-r.Route("/api/v1", func(r chi.Router) {
-    r.Use(slo.New(onMetric))  // Track only /api/v1 routes
-    r.Get("/users", listUsers)
-    r.Post("/users", createUser)
-})
+```sql
+-- Example: Alert when >1% of high_fast requests fail in 5 minutes
+SELECT
+  COUNT(*) FILTER (WHERE slo_status = 'FAIL') * 100.0 / COUNT(*) as failure_rate
+FROM logs
+WHERE slo_class = 'high_fast'
+  AND timestamp > NOW() - INTERVAL '5 minutes'
+HAVING failure_rate > 1.0
 ```
 
-### Panic Handling
+### Routes Without SLO
 
-The middleware automatically handles panics, recording them as 500 errors before re-raising:
+Routes without `slo.Track()` middleware won't have SLO fields in logs:
 
-```go
-onMetric := func(ctx context.Context, m slo.Metric) {
-    if m.StatusCode >= 500 {
-        // Log or alert on server errors
-        log.Printf("ERROR: %s %s returned %d", m.Method, m.Route, m.StatusCode)
-    }
-}
-
-r.Use(slo.New(onMetric))
+```json
+{"time":"...","level":"INFO","msg":"","method":"GET","path":"/misc","route":"/misc","status":200,"duration_ms":30}
 ```
 
 ## Complete Example
@@ -794,7 +757,6 @@ r.Use(slo.New(onMetric))
 package main
 
 import (
-    "context"
     "log"
     "net/http"
     "time"
@@ -802,6 +764,7 @@ import (
     "github.com/go-chi/chi/v5"
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
+    "github.com/nhalm/canonlog"
     "github.com/nhalm/chikit/auth"
     "github.com/nhalm/chikit/bind"
     "github.com/nhalm/chikit/headers"
@@ -817,28 +780,37 @@ type ListUsersQuery struct {
     Limit int `query:"limit" validate:"omitempty,min=1,max=100"`
 }
 
+type CreateUserRequest struct {
+    Email string `json:"email" validate:"required,email"`
+    Name  string `json:"name" validate:"required,min=2"`
+}
+
 func main() {
+    // Setup canonical logging
+    canonlog.SetupGlobalLogger("info", "json")
+
     r := chi.NewRouter()
 
     // Standard Chi middleware
     r.Use(middleware.RequestID)
     r.Use(middleware.RealIP)
-    r.Use(middleware.Logger)
 
-    // Wrapper for context-based response handling
-    r.Use(wrapper.New())
+    // Wrapper with canonlog and SLO logging
+    r.Use(wrapper.New(
+        wrapper.WithCanonlog(),
+        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+            return map[string]any{
+                "request_id": middleware.GetReqID(r.Context()),
+            }
+        }),
+        wrapper.WithSLOs(),
+    ))
 
     // Bind middleware for request binding/validation
     r.Use(bind.New())
 
     // Limit request body size to 10MB
     r.Use(validate.MaxBodySize(10 * 1024 * 1024))
-
-    // SLO tracking with callback
-    r.Use(slo.New(func(ctx context.Context, m slo.Metric) {
-        log.Printf("method=%s route=%s status=%d duration=%v",
-            m.Method, m.Route, m.StatusCode, m.Duration)
-    }))
 
     // Validate environment header
     r.Use(validate.NewHeaders(
@@ -868,10 +840,14 @@ func main() {
     defer st.Close()
 
     // Global rate limit: 1000 requests per hour per IP
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("global").
-        WithIP().
-        Limit(1000, time.Hour))
+    globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
+        ratelimit.WithName("global"),
+        ratelimit.WithIP(),
+    )
+    r.Use(globalLimiter.Handler)
+
+    // Health check with strict SLO
+    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
 
     // API routes
     r.Route("/api/v1", func(r chi.Router) {
@@ -881,14 +857,17 @@ func main() {
         }))
 
         // Per-tenant rate limiting: 100 requests per minute
-        r.Use(ratelimit.NewBuilder(st).
-            WithName("tenant").
-            WithIP().
-            WithHeader("X-Tenant-ID").
-            Limit(100, time.Minute))
+        tenantLimiter := ratelimit.New(st, 100, 1*time.Minute,
+            ratelimit.WithName("tenant"),
+            ratelimit.WithIP(),
+            ratelimit.WithHeader("X-Tenant-ID", true),
+        )
+        r.Use(tenantLimiter.Handler)
 
-        r.Get("/users", listUsers)
-        r.Post("/users", createUser)
+        r.With(slo.Track(slo.HighFast)).Get("/users", listUsers)
+        r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
+        r.With(slo.Track(slo.HighFast)).Post("/users", createUser)
+        r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
     })
 
     log.Fatal(http.ListenAndServe(":8080", r))
@@ -897,6 +876,10 @@ func main() {
 func validateAPIKey(key string) bool {
     // Implement your API key validation
     return true
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
@@ -920,6 +903,10 @@ func listUsers(w http.ResponseWriter, r *http.Request) {
     })
 }
 
+func getUser(w http.ResponseWriter, r *http.Request) {
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"id": chi.URLParam(r, "id")})
+}
+
 func createUser(w http.ResponseWriter, r *http.Request) {
     val, ok := headers.FromContext(r.Context(), "tenant_id")
     if !ok {
@@ -928,10 +915,21 @@ func createUser(w http.ResponseWriter, r *http.Request) {
     }
     tenantID := val.(uuid.UUID)
 
+    var req CreateUserRequest
+    if !bind.JSON(r, &req) {
+        return // Returns 400 for validation errors, 413 if body exceeds MaxBodySize limit
+    }
+
     // Create user for tenant...
     wrapper.SetResponse(r, http.StatusCreated, map[string]any{
         "tenant": tenantID.String(),
+        "email":  req.Email,
     })
+}
+
+func generateReport(w http.ResponseWriter, r *http.Request) {
+    // Long-running report generation...
+    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "complete"})
 }
 ```
 
