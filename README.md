@@ -201,9 +201,7 @@ Enable SLO status logging with `WithSLOs()`. See [SLO Tracking](#slo-tracking) f
 
 ## Rate Limiting
 
-### Simple API
-
-For common use cases, use the simple API:
+### Basic Usage
 
 ```go
 import (
@@ -220,63 +218,85 @@ func main() {
     st := store.NewMemory()
     defer st.Close()
 
-    // Rate limit by IP: 10 requests per minute
-    r.Use(ratelimit.ByIP(st, 10, time.Minute))
+    // Rate limit by IP: 100 requests per minute
+    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithIP()).Handler)
 
-    // Rate limit by header: 1000 requests per hour
-    r.Use(ratelimit.ByHeader(st, "X-API-Key", 1000, time.Hour))
+    // Rate limit by header
+    r.Use(ratelimit.New(st, 1000, 1*time.Hour, ratelimit.WithHeader("X-API-Key")).Handler)
 
-    // Rate limit by endpoint: 100 requests per minute
-    r.Use(ratelimit.ByEndpoint(st, 100, time.Minute))
-
-    // Rate limit by query parameter
-    r.Use(ratelimit.ByQueryParam(st, "user_id", 50, time.Minute))
+    // Rate limit by endpoint
+    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithEndpoint()).Handler)
 }
 ```
 
-### Fluent Builder API
+### Multi-Dimensional Rate Limiting
 
-For complex multi-dimensional rate limiting:
+Combine multiple key dimensions for fine-grained control:
 
 ```go
 // Rate limit by IP + endpoint combination
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithEndpoint().
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+)
+r.Use(limiter.Handler)
 
 // Rate limit by IP + tenant header
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeader("X-Tenant-ID").
-    Limit(1000, time.Hour))
+limiter := ratelimit.New(st, 1000, 1*time.Hour,
+    ratelimit.WithIP(),
+    ratelimit.WithHeader("X-Tenant-ID"),
+)
+r.Use(limiter.Handler)
 
 // Complex multi-dimensional rate limiting
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithEndpoint().
-    WithHeader("X-API-Key").
-    WithQueryParam("user_id").
-    Limit(50, time.Minute))
+limiter := ratelimit.New(st, 50, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+    ratelimit.WithHeader("X-API-Key"),
+    ratelimit.WithQueryParam("user_id"),
+)
+r.Use(limiter.Handler)
 ```
+
+### Key Dimension Options
+
+| Option | Description |
+|--------|-------------|
+| `WithIP()` | Client IP from RemoteAddr (direct connections) |
+| `WithRealIP()` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
+| `WithEndpoint()` | HTTP method + path (e.g., `GET:/api/users`) |
+| `WithHeader(name)` | Header value (skips if missing) |
+| `WithQueryParam(name)` | Query parameter value (skips if missing) |
+| `WithCustomKey(fn)` | Custom key function |
+| `WithName(name)` | Key prefix for collision prevention |
 
 ### Redis Backend (Production)
 
 For distributed deployments:
 
 ```go
-import "github.com/nhalm/chikit/ratelimit/store"
+import (
+    "log"
+    "time"
 
-st, err := store.NewRedis(store.RedisConfig{
-    URL:      "redis.default.svc.cluster.local:6379",
-    Password: "your-password",
-    DB:       0,
-    Prefix:   "ratelimit:",
-})
-if err != nil {
-    log.Fatal(err)
+    "github.com/go-chi/chi/v5"
+    "github.com/nhalm/chikit/ratelimit"
+    "github.com/nhalm/chikit/ratelimit/store"
+)
+
+func main() {
+    st, err := store.NewRedis(store.RedisConfig{
+        URL:    "redis:6379",
+        Prefix: "rl:",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer st.Close()
+
+    r := chi.NewRouter()
+    r.Use(ratelimit.New(st, 100, time.Minute, ratelimit.WithIP()).Handler)
 }
-defer st.Close()
 ```
 
 ### Custom Key Functions
@@ -284,13 +304,13 @@ defer st.Close()
 Build your own rate limiting logic:
 
 ```go
-keyFn := func(r *http.Request) string {
-    // Extract user ID from JWT or context
-    userID := getUserIDFromToken(r)
-    return fmt.Sprintf("user:%s:%s", userID, r.URL.Path)
-}
-
-limiter := ratelimit.New(st, 100, time.Minute, keyFn)
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithCustomKey(func(r *http.Request) string {
+        // Extract user ID from JWT or context
+        userID := getUserIDFromToken(r)
+        return fmt.Sprintf("user:%s:%s", userID, r.URL.Path)
+    }),
+)
 r.Use(limiter.Handler)
 ```
 
@@ -305,26 +325,26 @@ RateLimit-Reset: 1735401600
 Retry-After: 60
 ```
 
-Header behavior can be configured using the Builder API:
+Header behavior can be configured:
 
 ```go
 // Always include headers (default)
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersAlways).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersAlways),
+)
 
 // Include headers only on 429 responses
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersOnLimitExceeded).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersOnLimitExceeded),
+)
 
 // Never include headers
-r.Use(ratelimit.NewBuilder(st).
-    WithIP().
-    WithHeaderMode(ratelimit.HeadersNever).
-    Limit(100, time.Minute))
+limiter := ratelimit.New(st, 100, 1*time.Minute,
+    ratelimit.WithIP(),
+    ratelimit.WithHeaderMode(ratelimit.HeadersNever),
+)
 ```
 
 ### Layered Rate Limiting
@@ -336,21 +356,21 @@ st := store.NewMemory()
 defer st.Close()
 
 // Global limit: 1000 requests per hour per IP
-globalLimiter := ratelimit.NewBuilder(st).
-    WithName("global").
-    WithIP().
-    Limit(1000, time.Hour)
+globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
+    ratelimit.WithName("global"),
+    ratelimit.WithIP(),
+)
 
 // Endpoint-specific limit: 10 requests per minute per IP+endpoint
-endpointLimiter := ratelimit.NewBuilder(st).
-    WithName("endpoint").
-    WithIP().
-    WithEndpoint().
-    Limit(10, time.Minute)
+endpointLimiter := ratelimit.New(st, 10, 1*time.Minute,
+    ratelimit.WithName("endpoint"),
+    ratelimit.WithIP(),
+    ratelimit.WithEndpoint(),
+)
 
 // Apply both limiters
-r.Use(globalLimiter)
-r.Use(endpointLimiter)
+r.Use(globalLimiter.Handler)
+r.Use(endpointLimiter.Handler)
 ```
 
 Without `WithName()`, the keys would collide because both limiters use `WithIP()`. The name is prepended to the key:
@@ -368,26 +388,29 @@ This pattern is useful for implementing tiered rate limits:
 
 ```go
 // Tier 1: Broad protection (DDoS prevention)
-r.Use(ratelimit.NewBuilder(st).
-    WithName("ddos").
-    WithIP().
-    Limit(10000, time.Hour))
+ddosLimiter := ratelimit.New(st, 10000, 1*time.Hour,
+    ratelimit.WithName("ddos"),
+    ratelimit.WithIP(),
+)
+r.Use(ddosLimiter.Handler)
 
 // Tier 2: API endpoint protection
 r.Route("/api", func(r chi.Router) {
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("api").
-        WithIP().
-        WithEndpoint().
-        Limit(100, time.Minute))
+    apiLimiter := ratelimit.New(st, 100, 1*time.Minute,
+        ratelimit.WithName("api"),
+        ratelimit.WithIP(),
+        ratelimit.WithEndpoint(),
+    )
+    r.Use(apiLimiter.Handler)
 })
 
 // Tier 3: Expensive operation protection
 r.Route("/api/analytics/run", func(r chi.Router) {
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("analytics").
-        WithHeader("X-User-ID").
-        Limit(5, time.Hour))
+    analyticsLimiter := ratelimit.New(st, 5, 1*time.Hour,
+        ratelimit.WithName("analytics"),
+        ratelimit.WithHeader("X-User-ID"),
+    )
+    r.Use(analyticsLimiter.Handler)
     r.Post("/", analyticsHandler)
 })
 ```
@@ -829,10 +852,11 @@ func main() {
     defer st.Close()
 
     // Global rate limit: 1000 requests per hour per IP
-    r.Use(ratelimit.NewBuilder(st).
-        WithName("global").
-        WithIP().
-        Limit(1000, time.Hour))
+    globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
+        ratelimit.WithName("global"),
+        ratelimit.WithIP(),
+    )
+    r.Use(globalLimiter.Handler)
 
     // Health check with strict SLO
     r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
@@ -845,11 +869,12 @@ func main() {
         }))
 
         // Per-tenant rate limiting: 100 requests per minute
-        r.Use(ratelimit.NewBuilder(st).
-            WithName("tenant").
-            WithIP().
-            WithHeader("X-Tenant-ID").
-            Limit(100, time.Minute))
+        tenantLimiter := ratelimit.New(st, 100, 1*time.Minute,
+            ratelimit.WithName("tenant"),
+            ratelimit.WithIP(),
+            ratelimit.WithHeader("X-Tenant-ID"),
+        )
+        r.Use(tenantLimiter.Handler)
 
         r.With(slo.Track(slo.HighFast)).Get("/users", listUsers)
         r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
