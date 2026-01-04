@@ -17,16 +17,20 @@
 //	limiter := ratelimit.New(store, 100, 1*time.Minute,
 //	    ratelimit.WithName("api"),
 //	    ratelimit.WithIP(),
-//	    ratelimit.WithHeader("X-Tenant-ID"),
+//	    ratelimit.WithHeader("X-Tenant-ID", false),
 //	)
 //	r.Use(limiter.Handler)
 //
-// Rate limiting is automatically skipped when no key dimensions produce a value.
+// Key dimension options accept a required bool parameter. When required=true and the
+// value is missing, the request is rejected with 400 Bad Request. When required=false
+// (default behavior), rate limiting is skipped for that request.
+//
 // For distributed deployments (Kubernetes), use the Redis store. The in-memory store
 // is only suitable for single-instance deployments and development.
 package ratelimit
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -55,9 +59,16 @@ const (
 	HeadersNever
 )
 
-// KeyFunc extracts a rate limiting key from an HTTP request.
-// Returning an empty string skips rate limiting for that request.
-type KeyFunc func(*http.Request) string
+// keyFunc extracts a rate limiting key component from an HTTP request.
+// Returning an empty string indicates the value is missing.
+type keyFunc func(*http.Request) string
+
+// keyDimension holds a key function with validation metadata.
+type keyDimension struct {
+	fn       keyFunc
+	required bool
+	name     string // for error messages (e.g., "header X-API-Key")
+}
 
 // Limiter implements rate limiting middleware.
 type Limiter struct {
@@ -65,7 +76,7 @@ type Limiter struct {
 	limit      int64
 	window     time.Duration
 	name       string
-	keyFns     []KeyFunc
+	keyDims    []keyDimension
 	headerMode HeaderMode
 }
 
@@ -88,82 +99,100 @@ func WithName(name string) Option {
 }
 
 // WithIP adds the client IP address (from RemoteAddr) to the rate limiting key.
-// Use this for direct connections without a proxy.
+// Use this for direct connections without a proxy. RemoteAddr is always present.
 func WithIP() Option {
 	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, func(r *http.Request) string {
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				return r.RemoteAddr
-			}
-			return ip
+		l.keyDims = append(l.keyDims, keyDimension{
+			fn: func(r *http.Request) string {
+				ip, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					return r.RemoteAddr
+				}
+				return ip
+			},
+			required: false, // RemoteAddr is always present
+			name:     "IP",
 		})
 	}
 }
 
 // WithRealIP adds the client IP from X-Forwarded-For or X-Real-IP headers.
-// Use this when behind a proxy/load balancer. Returns empty string if neither
-// header is present (rate limiting will be skipped).
+// Use this when behind a proxy/load balancer.
+//
+// If required=true, returns 400 Bad Request when neither header is present.
+// If required=false, rate limiting is skipped when neither header is present.
 //
 // SECURITY: Only use this behind a trusted reverse proxy that sets these headers.
 // Without a proxy, clients can spoof X-Forwarded-For to bypass rate limits.
-func WithRealIP() Option {
+func WithRealIP(required bool) Option {
 	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, func(r *http.Request) string {
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				if idx := strings.Index(xff, ","); idx != -1 {
-					return strings.TrimSpace(xff[:idx])
+		l.keyDims = append(l.keyDims, keyDimension{
+			fn: func(r *http.Request) string {
+				if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+					if idx := strings.Index(xff, ","); idx != -1 {
+						return strings.TrimSpace(xff[:idx])
+					}
+					return strings.TrimSpace(xff)
 				}
-				return strings.TrimSpace(xff)
-			}
-			if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-				return strings.TrimSpace(realIP)
-			}
-			return ""
+				if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+					return strings.TrimSpace(realIP)
+				}
+				return ""
+			},
+			required: required,
+			name:     "X-Forwarded-For or X-Real-IP header",
 		})
 	}
 }
 
 // WithEndpoint adds the HTTP method and path to the rate limiting key.
-// Key component format: "<method>:<path>"
+// Key component format: "<method>:<path>". Method and path are always present.
 func WithEndpoint() Option {
 	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, func(r *http.Request) string {
-			var sb strings.Builder
-			sb.Grow(len(r.Method) + 1 + len(r.URL.Path))
-			sb.WriteString(r.Method)
-			sb.WriteByte(':')
-			sb.WriteString(r.URL.Path)
-			return sb.String()
+		l.keyDims = append(l.keyDims, keyDimension{
+			fn: func(r *http.Request) string {
+				var sb strings.Builder
+				sb.Grow(len(r.Method) + 1 + len(r.URL.Path))
+				sb.WriteString(r.Method)
+				sb.WriteByte(':')
+				sb.WriteString(r.URL.Path)
+				return sb.String()
+			},
+			required: false, // Method and path are always present
+			name:     "endpoint",
 		})
 	}
 }
 
 // WithHeader adds a header value to the rate limiting key.
-// If the header is missing, returns empty string (rate limiting skipped).
-func WithHeader(header string) Option {
+//
+// If required=true, returns 400 Bad Request when the header is missing.
+// If required=false, rate limiting is skipped when the header is missing.
+func WithHeader(header string, required bool) Option {
 	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, func(r *http.Request) string {
-			return r.Header.Get(header)
+		l.keyDims = append(l.keyDims, keyDimension{
+			fn: func(r *http.Request) string {
+				return r.Header.Get(header)
+			},
+			required: required,
+			name:     fmt.Sprintf("header %s", header),
 		})
 	}
 }
 
 // WithQueryParam adds a query parameter value to the rate limiting key.
-// If the parameter is missing, returns empty string (rate limiting skipped).
-func WithQueryParam(param string) Option {
+//
+// If required=true, returns 400 Bad Request when the parameter is missing.
+// If required=false, rate limiting is skipped when the parameter is missing.
+func WithQueryParam(param string, required bool) Option {
 	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, func(r *http.Request) string {
-			return r.URL.Query().Get(param)
+		l.keyDims = append(l.keyDims, keyDimension{
+			fn: func(r *http.Request) string {
+				return r.URL.Query().Get(param)
+			},
+			required: required,
+			name:     fmt.Sprintf("query param %s", param),
 		})
-	}
-}
-
-// WithCustomKey adds a custom key function to the rate limiting key.
-// Return empty string to skip rate limiting for a request.
-func WithCustomKey(fn KeyFunc) Option {
-	return func(l *Limiter) {
-		l.keyFns = append(l.keyFns, fn)
 	}
 }
 
@@ -171,22 +200,18 @@ func WithCustomKey(fn KeyFunc) Option {
 // Use With* options to configure key dimensions and behavior.
 // Returns 429 (Too Many Requests) when the limit is exceeded, with standard
 // rate limit headers and a Retry-After header indicating seconds until reset.
+// Returns 400 (Bad Request) if a required key dimension is missing.
 // Returns 500 (Internal Server Error) if the store operation fails.
 //
 // At least one key dimension option (WithIP, WithRealIP, WithHeader, WithEndpoint,
-// WithQueryParam, or WithCustomKey) must be provided. Panics if no key dimensions
-// are configured.
-//
-// If no key dimensions produce a value at runtime (e.g., missing header),
-// rate limiting is skipped for that request.
+// or WithQueryParam) must be provided. Panics if no key dimensions are configured.
 //
 // Options:
 //   - WithIP: Add RemoteAddr IP to key (direct connections)
-//   - WithRealIP: Add X-Forwarded-For/X-Real-IP to key (proxied requests, skips if missing)
+//   - WithRealIP: Add X-Forwarded-For/X-Real-IP to key (proxied requests)
 //   - WithEndpoint: Add method:path to key
-//   - WithHeader: Add header value to key (skips if missing)
-//   - WithQueryParam: Add query parameter to key (skips if missing)
-//   - WithCustomKey: Add custom key function
+//   - WithHeader: Add header value to key
+//   - WithQueryParam: Add query parameter to key
 //   - WithName: Set key prefix for collision prevention
 //   - WithHeaderMode: Configure header visibility (default: HeadersAlways)
 func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limiter {
@@ -194,14 +219,14 @@ func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limit
 		store:      st,
 		limit:      int64(limit),
 		window:     window,
-		keyFns:     make([]KeyFunc, 0),
+		keyDims:    make([]keyDimension, 0),
 		headerMode: HeadersAlways,
 	}
 	for _, opt := range opts {
 		opt(l)
 	}
-	if len(l.keyFns) == 0 {
-		panic("ratelimit: must configure at least one key dimension option (WithIP, WithRealIP, WithEndpoint, WithHeader, WithQueryParam, or WithCustomKey)")
+	if len(l.keyDims) == 0 {
+		panic("ratelimit: must configure at least one key dimension option (WithIP, WithRealIP, WithEndpoint, WithHeader, or WithQueryParam)")
 	}
 	return l
 }
@@ -216,14 +241,27 @@ func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limit
 // These headers follow the IETF draft-ietf-httpapi-ratelimit-headers specification.
 func (l *Limiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := l.buildKey(r)
+		ctx := r.Context()
+		useWrapper := wrapper.HasState(ctx)
+
+		key, missingDim := l.buildKey(r)
+
+		// Check for missing required dimension
+		if missingDim != "" {
+			errMsg := fmt.Sprintf("Missing required %s", missingDim)
+			if useWrapper {
+				wrapper.SetError(r, wrapper.ErrBadRequest.With(errMsg))
+			} else {
+				http.Error(w, errMsg, http.StatusBadRequest)
+			}
+			return
+		}
+
+		// No key produced (all optional dimensions empty) - skip rate limiting
 		if key == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-
-		ctx := r.Context()
-		useWrapper := wrapper.HasState(ctx)
 
 		count, ttl, err := l.store.Increment(ctx, key, l.window)
 		if err != nil {
@@ -273,9 +311,11 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 	})
 }
 
-func (l *Limiter) buildKey(r *http.Request) string {
+// buildKey builds the rate limit key from all dimensions.
+// Returns (key, missingDimName). If missingDimName is non-empty, a required dimension was missing.
+func (l *Limiter) buildKey(r *http.Request) (string, string) {
 	var sb strings.Builder
-	sb.Grow(20 + len(l.keyFns)*30)
+	sb.Grow(20 + len(l.keyDims)*30)
 	hasContent := false
 
 	if l.name != "" {
@@ -283,18 +323,23 @@ func (l *Limiter) buildKey(r *http.Request) string {
 		hasContent = true
 	}
 
-	for _, fn := range l.keyFns {
-		if part := fn(r); part != "" {
-			if hasContent {
-				sb.WriteByte(':')
+	for _, dim := range l.keyDims {
+		part := dim.fn(r)
+		if part == "" {
+			if dim.required {
+				return "", dim.name
 			}
-			sb.WriteString(part)
-			hasContent = true
+			continue
 		}
+		if hasContent {
+			sb.WriteByte(':')
+		}
+		sb.WriteString(part)
+		hasContent = true
 	}
 
 	if !hasContent {
-		return ""
+		return "", ""
 	}
-	return sb.String()
+	return sb.String(), ""
 }
