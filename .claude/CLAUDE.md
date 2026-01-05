@@ -54,12 +54,13 @@ wrapper.SetError(r, wrapper.ErrBadRequest.WithParam("Invalid format", "email"))
 ```go
 // Single dimension
 limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithIP())
+r.Use(limiter.Handler)
 
 // Multi-dimensional with required/optional
 limiter := ratelimit.New(st, 100, time.Minute,
     ratelimit.WithIP(),
-    ratelimit.WithHeader("X-Tenant-ID", true),   // required=true: 400 if missing
-    ratelimit.WithQueryParam("user_id", false),  // required=false: skip if missing
+    ratelimit.WithHeaderRequired("X-Tenant-ID"),  // 400 if missing
+    ratelimit.WithQueryParam("user_id"),          // skip if missing
 )
 r.Use(limiter.Handler)
 ```

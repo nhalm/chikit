@@ -17,13 +17,13 @@
 //	limiter := ratelimit.New(store, 100, 1*time.Minute,
 //	    ratelimit.WithName("api"),
 //	    ratelimit.WithIP(),
-//	    ratelimit.WithHeader("X-Tenant-ID", false),
+//	    ratelimit.WithHeader("X-Tenant-ID"),
 //	)
 //	r.Use(limiter.Handler)
 //
-// Key dimension options accept a required bool parameter. When required=true and the
-// value is missing, the request is rejected with 400 Bad Request. When required=false
-// (default behavior), rate limiting is skipped for that request.
+// Key dimension options have optional *Required variants (e.g., WithHeaderRequired).
+// When a required dimension is missing, the request is rejected with 400 Bad Request.
+// When a non-required dimension is missing, rate limiting is skipped for that request.
 //
 // For distributed deployments (Kubernetes), use the Redis store. The in-memory store
 // is only suitable for single-instance deployments and development.
@@ -118,13 +118,25 @@ func WithIP() Option {
 
 // WithRealIP adds the client IP from X-Forwarded-For or X-Real-IP headers.
 // Use this when behind a proxy/load balancer.
-//
-// If required=true, returns 400 Bad Request when neither header is present.
-// If required=false, rate limiting is skipped when neither header is present.
+// If neither header is present, rate limiting is skipped for that request.
 //
 // SECURITY: Only use this behind a trusted reverse proxy that sets these headers.
 // Without a proxy, clients can spoof X-Forwarded-For to bypass rate limits.
-func WithRealIP(required bool) Option {
+func WithRealIP() Option {
+	return withRealIP(false)
+}
+
+// WithRealIPRequired adds the client IP from X-Forwarded-For or X-Real-IP headers.
+// Use this when behind a proxy/load balancer.
+// Returns 400 Bad Request when neither header is present.
+//
+// SECURITY: Only use this behind a trusted reverse proxy that sets these headers.
+// Without a proxy, clients can spoof X-Forwarded-For to bypass rate limits.
+func WithRealIPRequired() Option {
+	return withRealIP(true)
+}
+
+func withRealIP(required bool) Option {
 	return func(l *Limiter) {
 		l.keyDims = append(l.keyDims, keyDimension{
 			fn: func(r *http.Request) string {
@@ -165,10 +177,18 @@ func WithEndpoint() Option {
 }
 
 // WithHeader adds a header value to the rate limiting key.
-//
-// If required=true, returns 400 Bad Request when the header is missing.
-// If required=false, rate limiting is skipped when the header is missing.
-func WithHeader(header string, required bool) Option {
+// If the header is missing, rate limiting is skipped for that request.
+func WithHeader(header string) Option {
+	return withHeader(header, false)
+}
+
+// WithHeaderRequired adds a header value to the rate limiting key.
+// Returns 400 Bad Request when the header is missing.
+func WithHeaderRequired(header string) Option {
+	return withHeader(header, true)
+}
+
+func withHeader(header string, required bool) Option {
 	return func(l *Limiter) {
 		l.keyDims = append(l.keyDims, keyDimension{
 			fn: func(r *http.Request) string {
@@ -181,10 +201,18 @@ func WithHeader(header string, required bool) Option {
 }
 
 // WithQueryParam adds a query parameter value to the rate limiting key.
-//
-// If required=true, returns 400 Bad Request when the parameter is missing.
-// If required=false, rate limiting is skipped when the parameter is missing.
-func WithQueryParam(param string, required bool) Option {
+// If the parameter is missing, rate limiting is skipped for that request.
+func WithQueryParam(param string) Option {
+	return withQueryParam(param, false)
+}
+
+// WithQueryParamRequired adds a query parameter value to the rate limiting key.
+// Returns 400 Bad Request when the parameter is missing.
+func WithQueryParamRequired(param string) Option {
+	return withQueryParam(param, true)
+}
+
+func withQueryParam(param string, required bool) Option {
 	return func(l *Limiter) {
 		l.keyDims = append(l.keyDims, keyDimension{
 			fn: func(r *http.Request) string {
@@ -200,18 +228,20 @@ func WithQueryParam(param string, required bool) Option {
 // Use With* options to configure key dimensions and behavior.
 // Returns 429 (Too Many Requests) when the limit is exceeded, with standard
 // rate limit headers and a Retry-After header indicating seconds until reset.
-// Returns 400 (Bad Request) if a required key dimension is missing.
+// Returns 400 (Bad Request) if a *Required dimension is missing.
 // Returns 500 (Internal Server Error) if the store operation fails.
 //
-// At least one key dimension option (WithIP, WithRealIP, WithHeader, WithEndpoint,
-// or WithQueryParam) must be provided. Panics if no key dimensions are configured.
+// At least one key dimension option must be provided.
+// Panics if no key dimensions are configured.
 //
-// Options:
+// Key dimension options:
 //   - WithIP: Add RemoteAddr IP to key (direct connections)
-//   - WithRealIP: Add X-Forwarded-For/X-Real-IP to key (proxied requests)
+//   - WithRealIP / WithRealIPRequired: Add X-Forwarded-For/X-Real-IP to key
 //   - WithEndpoint: Add method:path to key
-//   - WithHeader: Add header value to key
-//   - WithQueryParam: Add query parameter to key
+//   - WithHeader / WithHeaderRequired: Add header value to key
+//   - WithQueryParam / WithQueryParamRequired: Add query parameter to key
+//
+// Other options:
 //   - WithName: Set key prefix for collision prevention
 //   - WithHeaderMode: Configure header visibility (default: HeadersAlways)
 func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limiter {
