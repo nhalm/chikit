@@ -222,7 +222,7 @@ func main() {
     r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithIP()).Handler)
 
     // Rate limit by header (skip if header missing)
-    r.Use(ratelimit.New(st, 1000, 1*time.Hour, ratelimit.WithHeader("X-API-Key", false)).Handler)
+    r.Use(ratelimit.New(st, 1000, 1*time.Hour, ratelimit.WithHeader("X-API-Key")).Handler)
 
     // Rate limit by endpoint
     r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithEndpoint()).Handler)
@@ -244,7 +244,7 @@ r.Use(limiter.Handler)
 // Rate limit by IP + tenant header (reject if header missing)
 limiter := ratelimit.New(st, 1000, 1*time.Hour,
     ratelimit.WithIP(),
-    ratelimit.WithHeader("X-Tenant-ID", true),
+    ratelimit.WithHeaderRequired("X-Tenant-ID"),
 )
 r.Use(limiter.Handler)
 
@@ -252,8 +252,8 @@ r.Use(limiter.Handler)
 limiter := ratelimit.New(st, 50, 1*time.Minute,
     ratelimit.WithIP(),
     ratelimit.WithEndpoint(),
-    ratelimit.WithHeader("X-API-Key", true),
-    ratelimit.WithQueryParam("user_id", false),
+    ratelimit.WithHeaderRequired("X-API-Key"),
+    ratelimit.WithQueryParam("user_id"),
 )
 r.Use(limiter.Handler)
 ```
@@ -263,15 +263,17 @@ r.Use(limiter.Handler)
 | Option | Description |
 |--------|-------------|
 | `WithIP()` | Client IP from RemoteAddr (direct connections) |
-| `WithRealIP(required)` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
+| `WithRealIP()` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
+| `WithRealIPRequired()` | Same as WithRealIP, but returns 400 if missing |
 | `WithEndpoint()` | HTTP method + path (e.g., `GET:/api/users`) |
-| `WithHeader(name, required)` | Header value |
-| `WithQueryParam(name, required)` | Query parameter value |
+| `WithHeader(name)` | Header value (skip if missing) |
+| `WithHeaderRequired(name)` | Header value (400 if missing) |
+| `WithQueryParam(name)` | Query parameter value (skip if missing) |
+| `WithQueryParamRequired(name)` | Query parameter value (400 if missing) |
 | `WithName(name)` | Key prefix for collision prevention |
 
-The `required` parameter controls behavior when the value is missing:
-- `required=true`: Returns 400 Bad Request if the value is missing
-- `required=false`: Skips rate limiting for that request if the value is missing
+The `*Required` variants return 400 Bad Request if the value is missing.
+The non-required variants skip rate limiting for that request if the value is missing.
 
 ### Redis Backend (Production)
 
@@ -396,7 +398,7 @@ r.Route("/api", func(r chi.Router) {
 r.Route("/api/analytics/run", func(r chi.Router) {
     analyticsLimiter := ratelimit.New(st, 5, 1*time.Hour,
         ratelimit.WithName("analytics"),
-        ratelimit.WithHeader("X-User-ID", true),
+        ratelimit.WithHeaderRequired("X-User-ID"),
     )
     r.Use(analyticsLimiter.Handler)
     r.Post("/", analyticsHandler)
@@ -860,7 +862,7 @@ func main() {
         tenantLimiter := ratelimit.New(st, 100, 1*time.Minute,
             ratelimit.WithName("tenant"),
             ratelimit.WithIP(),
-            ratelimit.WithHeader("X-Tenant-ID", true),
+            ratelimit.WithHeaderRequired("X-Tenant-ID"),
         )
         r.Use(tenantLimiter.Handler)
 

@@ -52,7 +52,7 @@ func TestWithRealIP(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute, ratelimit.WithRealIP(false))
+	limiter := ratelimit.New(st, 2, time.Minute, ratelimit.WithRealIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -80,7 +80,7 @@ func TestWithRealIP(t *testing.T) {
 		st2 := store.NewMemory()
 		defer st2.Close()
 
-		limiter2 := ratelimit.New(st2, 2, time.Minute, ratelimit.WithRealIP(false))
+		limiter2 := ratelimit.New(st2, 2, time.Minute, ratelimit.WithRealIP())
 		handler2 := limiter2.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -107,7 +107,7 @@ func TestWithRealIP(t *testing.T) {
 		st3 := store.NewMemory()
 		defer st3.Close()
 
-		limiter3 := ratelimit.New(st3, 1, time.Minute, ratelimit.WithRealIP(false))
+		limiter3 := ratelimit.New(st3, 1, time.Minute, ratelimit.WithRealIP())
 		handler3 := limiter3.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -123,11 +123,11 @@ func TestWithRealIP(t *testing.T) {
 	})
 }
 
-func TestWithRealIP_Required(t *testing.T) {
+func TestWithRealIPRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIP(true))
+	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIPRequired())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -156,7 +156,7 @@ func TestWithHeader(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithHeader("X-API-Key", false))
+	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithHeader("X-API-Key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -179,11 +179,11 @@ func TestWithHeader(t *testing.T) {
 	}
 }
 
-func TestWithHeader_Required(t *testing.T) {
+func TestWithHeaderRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeader("X-API-Key", true))
+	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeaderRequired("X-API-Key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -211,11 +211,11 @@ func TestWithHeader_Required(t *testing.T) {
 	}
 }
 
-func TestWithHeader_Required_WithWrapper(t *testing.T) {
+func TestWithHeaderRequired_WithWrapper(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeader("X-API-Key", true))
+	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeaderRequired("X-API-Key"))
 	handler := wrapper.New()(limiter.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	})))
@@ -268,7 +268,7 @@ func TestWithQueryParam(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithQueryParam("api_key", false))
+	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithQueryParam("api_key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -290,11 +290,11 @@ func TestWithQueryParam(t *testing.T) {
 	}
 }
 
-func TestWithQueryParam_Required(t *testing.T) {
+func TestWithQueryParamRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithQueryParam("api_key", true))
+	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithQueryParamRequired("api_key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -503,7 +503,7 @@ func TestWithName_MultiDimension(t *testing.T) {
 	limiter := ratelimit.New(st, 2, time.Minute,
 		ratelimit.WithName("api"),
 		ratelimit.WithIP(),
-		ratelimit.WithHeader("X-Tenant-ID", false),
+		ratelimit.WithHeader("X-Tenant-ID"),
 	)
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -744,7 +744,7 @@ func TestWithRealIP_EdgeCases(t *testing.T) {
 			st := store.NewMemory()
 			defer st.Close()
 
-			limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIP(false))
+			limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIP())
 			handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
