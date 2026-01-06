@@ -1,46 +1,16 @@
-// Package auth provides authentication middleware for API key and bearer token validation.
-//
-// The package offers two authentication strategies with customizable validators:
-//   - APIKey: Validates API keys from configurable headers (default: X-API-Key)
-//   - BearerToken: Validates bearer tokens from Authorization header
-//
-// Both strategies store validated credentials in the request context for downstream
-// handlers to access. Validation failures return 401 (Unauthorized).
-//
-// Example with API key authentication:
-//
-//	validator := func(key string) bool {
-//		return db.ValidateAPIKey(key)
-//	}
-//	r.Use(auth.APIKey(validator))
-//
-// Example with bearer token:
-//
-//	validator := func(token string) bool {
-//		return jwt.Validate(token)
-//	}
-//	r.Use(auth.BearerToken(validator))
-//
-// Access authenticated values from context:
-//
-//	if key, ok := auth.APIKeyFromContext(ctx); ok {
-//		// Use the validated API key
-//	}
-package auth
+package chikit
 
 import (
 	"context"
 	"net/http"
 	"strings"
-
-	"github.com/nhalm/chikit/wrapper"
 )
 
-type contextKey string
+type authContextKey string
 
 const (
-	apiKeyContextKey contextKey = "api_key"
-	bearerTokenKey   contextKey = "bearer_token"
+	apiKeyKey      authContextKey = "api_key"
+	bearerTokenKey authContextKey = "bearer_token"
 )
 
 // APIKeyValidator validates an API key and returns true if valid.
@@ -48,8 +18,8 @@ const (
 // against a database, cache, or any other validation mechanism.
 type APIKeyValidator func(key string) bool
 
-// APIKeyConfig configures the APIKey middleware.
-type APIKeyConfig struct {
+// apiKeyConfig configures the APIKey middleware.
+type apiKeyConfig struct {
 	// Header is the HTTP header to read the API key from (default: "X-API-Key")
 	Header string
 
@@ -71,17 +41,17 @@ type APIKeyConfig struct {
 //	validator := func(key string) bool {
 //		return key == "secret-key" // In production, check against DB/cache
 //	}
-//	r.Use(auth.APIKey(validator))
+//	r.Use(chikit.APIKey(validator))
 //
 // With custom header:
 //
-//	r.Use(auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-Key")))
+//	r.Use(chikit.APIKey(validator, chikit.WithAPIKeyHeader("X-Custom-Key")))
 //
 // Optional authentication:
 //
-//	r.Use(auth.APIKey(validator, auth.WithOptionalAPIKey()))
+//	r.Use(chikit.APIKey(validator, chikit.WithOptionalAPIKey()))
 func APIKey(validator APIKeyValidator, opts ...APIKeyOption) func(http.Handler) http.Handler {
-	config := APIKeyConfig{
+	config := apiKeyConfig{
 		Header:    "X-API-Key",
 		Validator: validator,
 		Optional:  false,
@@ -100,8 +70,8 @@ func APIKey(validator APIKeyValidator, opts ...APIKeyOption) func(http.Handler) 
 					next.ServeHTTP(w, r)
 					return
 				}
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Missing API key"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Missing API key"))
 				} else {
 					http.Error(w, "Missing API key", http.StatusUnauthorized)
 				}
@@ -109,27 +79,27 @@ func APIKey(validator APIKeyValidator, opts ...APIKeyOption) func(http.Handler) 
 			}
 
 			if !config.Validator(key) {
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid API key"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Invalid API key"))
 				} else {
 					http.Error(w, "Invalid API key", http.StatusUnauthorized)
 				}
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+			ctx := context.WithValue(r.Context(), apiKeyKey, key)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
 // APIKeyOption configures APIKey middleware.
-type APIKeyOption func(*APIKeyConfig)
+type APIKeyOption func(*apiKeyConfig)
 
 // WithAPIKeyHeader sets the header to read the API key from.
 // Default is "X-API-Key".
 func WithAPIKeyHeader(header string) APIKeyOption {
-	return func(c *APIKeyConfig) {
+	return func(c *apiKeyConfig) {
 		c.Header = header
 	}
 }
@@ -138,7 +108,7 @@ func WithAPIKeyHeader(header string) APIKeyOption {
 // When set, requests without an API key are allowed through without validation.
 // The API key will not be present in the context for these requests.
 func WithOptionalAPIKey() APIKeyOption {
-	return func(c *APIKeyConfig) {
+	return func(c *apiKeyConfig) {
 		c.Optional = true
 	}
 }
@@ -149,12 +119,12 @@ func WithOptionalAPIKey() APIKeyOption {
 // Example:
 //
 //	func handler(w http.ResponseWriter, r *http.Request) {
-//		if key, ok := auth.APIKeyFromContext(r.Context()); ok {
+//		if key, ok := chikit.APIKeyFromContext(r.Context()); ok {
 //			log.Printf("Request authenticated with key: %s", key)
 //		}
 //	}
 func APIKeyFromContext(ctx context.Context) (string, bool) {
-	key, ok := ctx.Value(apiKeyContextKey).(string)
+	key, ok := ctx.Value(apiKeyKey).(string)
 	return key, ok
 }
 
@@ -163,8 +133,8 @@ func APIKeyFromContext(ctx context.Context) (string, bool) {
 // JWT validation, token lookup, or any other validation mechanism.
 type BearerTokenValidator func(token string) bool
 
-// BearerTokenConfig configures the BearerToken middleware.
-type BearerTokenConfig struct {
+// bearerTokenConfig configures the BearerToken middleware.
+type bearerTokenConfig struct {
 	// Validator is the function that validates the bearer token
 	Validator BearerTokenValidator
 
@@ -183,13 +153,13 @@ type BearerTokenConfig struct {
 //	validator := func(token string) bool {
 //		return jwt.Validate(token) // Use your JWT library
 //	}
-//	r.Use(auth.BearerToken(validator))
+//	r.Use(chikit.BearerToken(validator))
 //
 // Optional authentication:
 //
-//	r.Use(auth.BearerToken(validator, auth.WithOptionalBearerToken()))
+//	r.Use(chikit.BearerToken(validator, chikit.WithOptionalBearerToken()))
 func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func(http.Handler) http.Handler {
-	config := BearerTokenConfig{
+	config := bearerTokenConfig{
 		Validator: validator,
 		Optional:  false,
 	}
@@ -207,8 +177,8 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 					next.ServeHTTP(w, r)
 					return
 				}
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Missing authorization header"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Missing authorization header"))
 				} else {
 					http.Error(w, "Missing authorization header", http.StatusUnauthorized)
 				}
@@ -217,8 +187,8 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 
 			const prefix = "Bearer "
 			if !strings.HasPrefix(auth, prefix) {
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid authorization format"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Invalid authorization format"))
 				} else {
 					http.Error(w, "Invalid authorization format", http.StatusUnauthorized)
 				}
@@ -227,8 +197,8 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 
 			token := strings.TrimPrefix(auth, prefix)
 			if token == "" {
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Empty bearer token"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Empty bearer token"))
 				} else {
 					http.Error(w, "Empty bearer token", http.StatusUnauthorized)
 				}
@@ -236,8 +206,8 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 			}
 
 			if !config.Validator(token) {
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid bearer token"))
+				if HasState(r.Context()) {
+					SetError(r, ErrUnauthorized.With("Invalid bearer token"))
 				} else {
 					http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
 				}
@@ -251,13 +221,13 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 }
 
 // BearerTokenOption configures BearerToken middleware.
-type BearerTokenOption func(*BearerTokenConfig)
+type BearerTokenOption func(*bearerTokenConfig)
 
 // WithOptionalBearerToken makes the bearer token optional.
 // When set, requests without a bearer token are allowed through without validation.
 // The token will not be present in the context for these requests.
 func WithOptionalBearerToken() BearerTokenOption {
-	return func(c *BearerTokenConfig) {
+	return func(c *bearerTokenConfig) {
 		c.Optional = true
 	}
 }
@@ -268,7 +238,7 @@ func WithOptionalBearerToken() BearerTokenOption {
 // Example:
 //
 //	func handler(w http.ResponseWriter, r *http.Request) {
-//		if token, ok := auth.BearerTokenFromContext(r.Context()); ok {
+//		if token, ok := chikit.BearerTokenFromContext(r.Context()); ok {
 //			claims := jwt.Parse(token)
 //			log.Printf("User: %s", claims.Subject)
 //		}

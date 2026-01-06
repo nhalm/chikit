@@ -14,7 +14,7 @@ test-cover:
 test-redis: docker-up
 	@echo "Waiting for Redis to be ready..."
 	@sleep 2
-	REDIS_URL=localhost:6379 go test -v ./ratelimit/store -run TestRedis
+	REDIS_URL=localhost:6379 go test -v ./store -run TestRedis
 	$(MAKE) docker-down
 
 test-all: docker-up

@@ -1,4 +1,4 @@
-package wrapper
+package chikit
 
 import (
 	"encoding/json"
@@ -10,11 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nhalm/canonlog"
-	"github.com/nhalm/chikit/slo"
 )
 
 func TestHandler_SuccessResponse(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusCreated, map[string]string{"id": "123"})
 	}))
 
@@ -42,7 +41,7 @@ func TestHandler_SuccessResponse(t *testing.T) {
 }
 
 func TestHandler_ErrorResponse(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetError(r, ErrNotFound.With("User not found"))
 	}))
 
@@ -55,7 +54,7 @@ func TestHandler_ErrorResponse(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
 
-	var body map[string]*Error
+	var body map[string]*APIError
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestHandler_ErrorResponse(t *testing.T) {
 }
 
 func TestHandler_ErrorTakesPrecedence(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 		SetError(r, ErrUnauthorized)
 	}))
@@ -86,7 +85,7 @@ func TestHandler_ErrorTakesPrecedence(t *testing.T) {
 }
 
 func TestHandler_PanicRecovery(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("something went wrong")
 	}))
 
@@ -99,7 +98,7 @@ func TestHandler_PanicRecovery(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 
-	var body map[string]*Error
+	var body map[string]*APIError
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -110,7 +109,7 @@ func TestHandler_PanicRecovery(t *testing.T) {
 }
 
 func TestHandler_CustomHeaders(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetHeader(r, "X-Request-ID", "abc123")
 		SetHeader(r, "X-RateLimit-Remaining", "99")
 		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
@@ -130,7 +129,7 @@ func TestHandler_CustomHeaders(t *testing.T) {
 }
 
 func TestHandler_EmptyResponse(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
@@ -144,7 +143,7 @@ func TestHandler_EmptyResponse(t *testing.T) {
 }
 
 func TestHandler_StatusOnlyResponse(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusNoContent, nil)
 	}))
 
@@ -161,7 +160,7 @@ func TestHandler_StatusOnlyResponse(t *testing.T) {
 func TestHasState(t *testing.T) {
 	var hasStateInHandler bool
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		hasStateInHandler = HasState(r.Context())
 	}))
 
@@ -180,7 +179,7 @@ func TestHasState(t *testing.T) {
 	}
 }
 
-func TestError_Is(t *testing.T) {
+func TestAPIError_Is(t *testing.T) {
 	err := ErrNotFound.With("User not found")
 
 	if !errors.Is(err, ErrNotFound) {
@@ -215,7 +214,7 @@ func TestNewValidationError(t *testing.T) {
 }
 
 func TestValidationError_JSONFormat(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetError(r, NewValidationError([]FieldError{
 			{Param: "email", Code: "required", Message: "Email is required"},
 		}))
@@ -251,7 +250,7 @@ func TestValidationError_JSONFormat(t *testing.T) {
 }
 
 func TestAllSentinelErrors(t *testing.T) {
-	sentinels := []*Error{
+	sentinels := []*APIError{
 		ErrBadRequest,
 		ErrUnauthorized,
 		ErrPaymentRequired,
@@ -284,8 +283,8 @@ func TestAllSentinelErrors(t *testing.T) {
 	}
 }
 
-func TestError_IsWithNilReceiverAndTarget(t *testing.T) {
-	var nilErr *Error
+func TestAPIError_IsWithNilReceiverAndTarget(t *testing.T) {
+	var nilErr *APIError
 
 	if !nilErr.Is(nil) {
 		t.Error("expected nil error to match nil target")
@@ -296,8 +295,8 @@ func TestError_IsWithNilReceiverAndTarget(t *testing.T) {
 	}
 }
 
-func TestError_WithNilReceiver(t *testing.T) {
-	var nilErr *Error
+func TestAPIError_WithNilReceiver(t *testing.T) {
+	var nilErr *APIError
 
 	result := nilErr.With("Some message")
 	if result != nil {
@@ -305,8 +304,8 @@ func TestError_WithNilReceiver(t *testing.T) {
 	}
 }
 
-func TestError_WithParamNilReceiver(t *testing.T) {
-	var nilErr *Error
+func TestAPIError_WithParamNilReceiver(t *testing.T) {
+	var nilErr *APIError
 
 	result := nilErr.WithParam("Some message", "param")
 	if result != nil {
@@ -315,7 +314,7 @@ func TestError_WithParamNilReceiver(t *testing.T) {
 }
 
 func TestHandler_JSONEncodingFailureBody(t *testing.T) {
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		unencodable := make(chan int)
 		SetResponse(r, http.StatusOK, map[string]any{"channel": unencodable})
 	}))
@@ -341,7 +340,7 @@ func TestHandler_JSONEncodingFailureBody(t *testing.T) {
 func TestHandler_ConcurrentSetError(t *testing.T) {
 	const goroutines = 100
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
@@ -368,7 +367,7 @@ func TestHandler_ConcurrentSetError(t *testing.T) {
 		t.Errorf("expected status %d or %d, got %d", http.StatusNotFound, http.StatusUnauthorized, rec.Code)
 	}
 
-	var body map[string]*Error
+	var body map[string]*APIError
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -381,7 +380,7 @@ func TestHandler_ConcurrentSetError(t *testing.T) {
 func TestHandler_ConcurrentSetResponse(t *testing.T) {
 	const goroutines = 100
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
@@ -417,7 +416,7 @@ func TestHandler_ConcurrentSetResponse(t *testing.T) {
 func TestHandler_ConcurrentSetHeader(t *testing.T) {
 	const goroutines = 100
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
@@ -455,7 +454,7 @@ func TestHandler_ConcurrentSetHeader(t *testing.T) {
 func TestHandler_ConcurrentMixedOperations(t *testing.T) {
 	const goroutines = 50
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines * 3)
 
@@ -492,7 +491,7 @@ func TestHandler_ConcurrentMixedOperations(t *testing.T) {
 func TestWithCanonlog_CreatesLogger(t *testing.T) {
 	var loggerFound bool
 
-	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_, loggerFound = canonlog.TryGetLogger(r.Context())
 		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	}))
@@ -514,7 +513,7 @@ func TestWithCanonlog_CreatesLogger(t *testing.T) {
 func TestWithCanonlog_Disabled(t *testing.T) {
 	var loggerFound bool
 
-	handler := New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_, loggerFound = canonlog.TryGetLogger(r.Context())
 		SetResponse(r, http.StatusOK, nil)
 	}))
@@ -532,7 +531,7 @@ func TestWithCanonlog_Disabled(t *testing.T) {
 func TestWithCanonlogFields_AddsCustomFields(t *testing.T) {
 	var capturedRequestID string
 
-	handler := New(
+	handler := Handler(
 		WithCanonlog(),
 		WithCanonlogFields(func(r *http.Request) map[string]any {
 			return map[string]any{
@@ -559,7 +558,7 @@ func TestWithCanonlogFields_AddsCustomFields(t *testing.T) {
 }
 
 func TestWithSLOs_LogsSLOStatus(t *testing.T) {
-	handler := New(
+	handler := Handler(
 		WithCanonlog(),
 		WithSLOs(),
 	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -567,7 +566,7 @@ func TestWithSLOs_LogsSLOStatus(t *testing.T) {
 	}))
 
 	r := chi.NewRouter()
-	r.With(slo.Track(slo.HighFast)).Get("/test", handler.ServeHTTP)
+	r.With(SLO(SLOHighFast)).Get("/test", handler.ServeHTTP)
 
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -580,11 +579,11 @@ func TestWithSLOs_LogsSLOStatus(t *testing.T) {
 }
 
 func TestWithSLOs_NoSLOOnRoute(t *testing.T) {
-	handler := New(
+	handler := Handler(
 		WithCanonlog(),
 		WithSLOs(),
 	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		tier, _, found := slo.GetTier(r.Context())
+		tier, _, found := GetSLO(r.Context())
 		if found {
 			t.Errorf("expected no SLO tier, got %s", tier)
 		}
@@ -602,14 +601,14 @@ func TestWithSLOs_NoSLOOnRoute(t *testing.T) {
 }
 
 func TestWithSLOs_DisabledWithoutWithCanonlog(t *testing.T) {
-	handler := New(
+	handler := Handler(
 		WithSLOs(),
 	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetResponse(r, http.StatusOK, nil)
 	}))
 
 	r := chi.NewRouter()
-	r.With(slo.Track(slo.HighFast)).Get("/test", handler.ServeHTTP)
+	r.With(SLO(SLOHighFast)).Get("/test", handler.ServeHTTP)
 
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -622,7 +621,7 @@ func TestWithSLOs_DisabledWithoutWithCanonlog(t *testing.T) {
 }
 
 func TestWithCanonlog_ErrorLogging(t *testing.T) {
-	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		SetError(r, ErrNotFound.With("User not found"))
 	}))
 
@@ -637,7 +636,7 @@ func TestWithCanonlog_ErrorLogging(t *testing.T) {
 }
 
 func TestWithCanonlog_PanicLogging(t *testing.T) {
-	handler := New(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	handler := Handler(WithCanonlog())(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("test panic")
 	}))
 

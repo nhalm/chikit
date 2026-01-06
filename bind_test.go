@@ -1,4 +1,4 @@
-package bind_test
+package chikit
 
 import (
 	"encoding/json"
@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/nhalm/chikit/bind"
-	"github.com/nhalm/chikit/wrapper"
 )
 
 type CreateUserRequest struct {
@@ -24,12 +22,12 @@ type ListUsersRequest struct {
 }
 
 func TestJSON_ValidInput(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"email": "test@example.com", "age": 25}`
@@ -57,12 +55,12 @@ func TestJSON_ValidInput(t *testing.T) {
 }
 
 func TestJSON_MalformedJSON(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"email": "test@example.com", age: 25}`
@@ -75,7 +73,7 @@ func TestJSON_MalformedJSON(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -89,12 +87,12 @@ func TestJSON_MalformedJSON(t *testing.T) {
 }
 
 func TestJSON_ValidationFailure(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"email": "invalid-email", "age": 15}`
@@ -109,10 +107,10 @@ func TestJSON_ValidationFailure(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Type    string               `json:"type"`
-			Code    string               `json:"code"`
-			Message string               `json:"message"`
-			Errors  []wrapper.FieldError `json:"errors"`
+			Type    string       `json:"type"`
+			Code    string       `json:"code"`
+			Message string       `json:"message"`
+			Errors  []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -128,12 +126,12 @@ func TestJSON_ValidationFailure(t *testing.T) {
 }
 
 func TestJSON_MissingRequired(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"age": 25}`
@@ -148,7 +146,7 @@ func TestJSON_MissingRequired(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Errors []wrapper.FieldError `json:"errors"`
+			Errors []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -167,12 +165,12 @@ func TestJSON_MissingRequired(t *testing.T) {
 }
 
 func TestQuery_ValidInput(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req ListUsersRequest
-		if !bind.Query(r, &req) {
+		if !Query(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=2&limit=50&status=active", http.NoBody)
@@ -201,12 +199,12 @@ func TestQuery_ValidInput(t *testing.T) {
 }
 
 func TestQuery_ValidationFailure(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req ListUsersRequest
-		if !bind.Query(r, &req) {
+		if !Query(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=-1&limit=200&status=unknown", http.NoBody)
@@ -220,8 +218,8 @@ func TestQuery_ValidationFailure(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Type   string               `json:"type"`
-			Errors []wrapper.FieldError `json:"errors"`
+			Type   string       `json:"type"`
+			Errors []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -237,12 +235,12 @@ func TestQuery_ValidationFailure(t *testing.T) {
 }
 
 func TestQuery_TypeConversionError(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req ListUsersRequest
-		if !bind.Query(r, &req) {
+		if !Query(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=notanumber", http.NoBody)
@@ -254,7 +252,7 @@ func TestQuery_TypeConversionError(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -269,12 +267,12 @@ func TestCustomFormatter(t *testing.T) {
 		return "CUSTOM:" + field + ":" + tag
 	}
 
-	handler := wrapper.New()(bind.New(bind.WithFormatter(customFormatter))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder(WithFormatter(customFormatter))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"age": 25}`
@@ -285,7 +283,7 @@ func TestCustomFormatter(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Errors []wrapper.FieldError `json:"errors"`
+			Errors []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -298,12 +296,12 @@ func TestCustomFormatter(t *testing.T) {
 }
 
 func TestDefaultFormatterWithoutMiddleware(t *testing.T) {
-	handler := wrapper.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	}))
 
 	body := `{"age": 25}`
@@ -314,7 +312,7 @@ func TestDefaultFormatterWithoutMiddleware(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Errors []wrapper.FieldError `json:"errors"`
+			Errors []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -327,7 +325,7 @@ func TestDefaultFormatterWithoutMiddleware(t *testing.T) {
 }
 
 func TestRegisterValidation(t *testing.T) {
-	err := bind.RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
+	err := RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
 		return fl.Field().String() == "valid"
 	})
 	if err != nil {
@@ -338,12 +336,12 @@ func TestRegisterValidation(t *testing.T) {
 		Value string `json:"value" validate:"customtag"`
 	}
 
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CustomRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"value": "valid"}`
@@ -368,12 +366,12 @@ func TestRegisterValidation(t *testing.T) {
 }
 
 func TestJSON_EmptyBody(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(""))
@@ -397,12 +395,12 @@ func TestDefaultFormatter_AllTags(t *testing.T) {
 		NoOp   string `json:"noop" validate:"alpha"`
 	}
 
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req AllTagsRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	body := `{"email": "x", "age": 1, "count": 200, "status": "x", "id": "x", "url": "x", "noop": "123"}`
@@ -413,7 +411,7 @@ func TestDefaultFormatter_AllTags(t *testing.T) {
 
 	var resp struct {
 		Error struct {
-			Errors []wrapper.FieldError `json:"errors"`
+			Errors []FieldError `json:"errors"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -449,12 +447,12 @@ func TestDefaultFormatter_AllTags(t *testing.T) {
 }
 
 func TestQuery_NilPointer(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req *ListUsersRequest
-		if !bind.Query(r, req) {
+		if !Query(r, req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
@@ -468,12 +466,12 @@ func TestQuery_NilPointer(t *testing.T) {
 }
 
 func TestQuery_NonPointer(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req ListUsersRequest
-		if !bind.Query(r, req) {
+		if !Query(r, req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
@@ -487,12 +485,12 @@ func TestQuery_NonPointer(t *testing.T) {
 }
 
 func TestQuery_PointerToNonStruct(t *testing.T) {
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var s string
-		if !bind.Query(r, &s) {
+		if !Query(r, &s) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, s)
+		SetResponse(r, http.StatusOK, s)
 	})))
 
 	req := httptest.NewRequest("GET", "/?page=1", http.NoBody)
@@ -510,12 +508,12 @@ func TestQuery_IntegerOverflow(t *testing.T) {
 		Count int8 `query:"count"`
 	}
 
-	handler := wrapper.New()(bind.New()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req SmallIntRequest
-		if !bind.Query(r, &req) {
+		if !Query(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	})))
 
 	req := httptest.NewRequest("GET", "/?count=1000", http.NoBody)
@@ -529,14 +527,14 @@ func TestQuery_IntegerOverflow(t *testing.T) {
 }
 
 func TestJSON_BodyTooLarge(t *testing.T) {
-	handler := wrapper.New()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Handler()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 10)
 
 		var req CreateUserRequest
-		if !bind.JSON(r, &req) {
+		if !JSON(r, &req) {
 			return
 		}
-		wrapper.SetResponse(r, http.StatusOK, req)
+		SetResponse(r, http.StatusOK, req)
 	}))
 
 	body := `{"email": "test@example.com", "age": 25}`
@@ -549,7 +547,7 @@ func TestJSON_BodyTooLarge(t *testing.T) {
 		t.Errorf("expected status 413, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}

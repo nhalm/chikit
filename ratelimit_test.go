@@ -1,4 +1,4 @@
-package ratelimit_test
+package chikit
 
 import (
 	"context"
@@ -12,16 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nhalm/chikit/ratelimit"
-	"github.com/nhalm/chikit/ratelimit/store"
-	"github.com/nhalm/chikit/wrapper"
+	"github.com/nhalm/chikit/store"
 )
 
 func TestWithIP(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute, ratelimit.WithIP())
+	limiter := NewRateLimiter(st, 2, time.Minute, RateLimitWithIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -52,7 +50,7 @@ func TestWithRealIP(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute, ratelimit.WithRealIP())
+	limiter := NewRateLimiter(st, 2, time.Minute, RateLimitWithRealIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -80,7 +78,7 @@ func TestWithRealIP(t *testing.T) {
 		st2 := store.NewMemory()
 		defer st2.Close()
 
-		limiter2 := ratelimit.New(st2, 2, time.Minute, ratelimit.WithRealIP())
+		limiter2 := NewRateLimiter(st2, 2, time.Minute, RateLimitWithRealIP())
 		handler2 := limiter2.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -107,7 +105,7 @@ func TestWithRealIP(t *testing.T) {
 		st3 := store.NewMemory()
 		defer st3.Close()
 
-		limiter3 := ratelimit.New(st3, 1, time.Minute, ratelimit.WithRealIP())
+		limiter3 := NewRateLimiter(st3, 1, time.Minute, RateLimitWithRealIP())
 		handler3 := limiter3.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -127,12 +125,11 @@ func TestWithRealIPRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIPRequired())
+	limiter := NewRateLimiter(st, 100, time.Minute, RateLimitWithRealIPRequired())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Request without X-Forwarded-For or X-Real-IP should return 400
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -141,7 +138,6 @@ func TestWithRealIPRequired(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 
-	// Request with header should succeed
 	req = httptest.NewRequest("GET", "/test", http.NoBody)
 	req.Header.Set("X-Forwarded-For", "10.0.0.1")
 	rr = httptest.NewRecorder()
@@ -156,7 +152,7 @@ func TestWithHeader(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithHeader("X-API-Key"))
+	limiter := NewRateLimiter(st, 3, time.Minute, RateLimitWithHeader("X-API-Key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -183,12 +179,11 @@ func TestWithHeaderRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeaderRequired("X-API-Key"))
+	limiter := NewRateLimiter(st, 100, time.Minute, RateLimitWithHeaderRequired("X-API-Key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Request without header should return 400
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -200,7 +195,6 @@ func TestWithHeaderRequired(t *testing.T) {
 		t.Errorf("unexpected error message: %q", body)
 	}
 
-	// Request with header should succeed
 	req = httptest.NewRequest("GET", "/test", http.NoBody)
 	req.Header.Set("X-API-Key", "test-key")
 	rr = httptest.NewRecorder()
@@ -215,12 +209,11 @@ func TestWithHeaderRequired_WithWrapper(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithHeaderRequired("X-API-Key"))
-	handler := wrapper.New()(limiter.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	limiter := NewRateLimiter(st, 100, time.Minute, RateLimitWithHeaderRequired("X-API-Key"))
+	handler := Handler()(limiter.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	})))
 
-	// Request without header should return 400 with JSON error
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -229,7 +222,7 @@ func TestWithHeaderRequired_WithWrapper(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -242,7 +235,7 @@ func TestWithEndpoint(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute, ratelimit.WithEndpoint())
+	limiter := NewRateLimiter(st, 2, time.Minute, RateLimitWithEndpoint())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -268,7 +261,7 @@ func TestWithQueryParam(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 3, time.Minute, ratelimit.WithQueryParam("api_key"))
+	limiter := NewRateLimiter(st, 3, time.Minute, RateLimitWithQueryParam("api_key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -294,12 +287,11 @@ func TestWithQueryParamRequired(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithQueryParamRequired("api_key"))
+	limiter := NewRateLimiter(st, 100, time.Minute, RateLimitWithQueryParamRequired("api_key"))
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Request without query param should return 400
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -308,7 +300,6 @@ func TestWithQueryParamRequired(t *testing.T) {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 
-	// Request with query param should succeed
 	req = httptest.NewRequest("GET", "/test?api_key=test-key", http.NoBody)
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -322,9 +313,9 @@ func TestMultiDimensional(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute,
-		ratelimit.WithIP(),
-		ratelimit.WithEndpoint(),
+	limiter := NewRateLimiter(st, 2, time.Minute,
+		RateLimitWithIP(),
+		RateLimitWithEndpoint(),
 	)
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -361,7 +352,7 @@ func TestRateLimitHeaders(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 5, time.Minute, ratelimit.WithIP())
+	limiter := NewRateLimiter(st, 5, time.Minute, RateLimitWithIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -388,25 +379,25 @@ func TestRateLimitHeaders(t *testing.T) {
 func TestHeaderModes(t *testing.T) {
 	tests := []struct {
 		name                  string
-		mode                  ratelimit.HeaderMode
+		mode                  RateLimitHeaderMode
 		wantHeadersOnSuccess  bool
 		wantHeadersOnExceeded bool
 	}{
 		{
 			name:                  "HeadersAlways",
-			mode:                  ratelimit.HeadersAlways,
+			mode:                  RateLimitHeadersAlways,
 			wantHeadersOnSuccess:  true,
 			wantHeadersOnExceeded: true,
 		},
 		{
 			name:                  "HeadersOnLimitExceeded",
-			mode:                  ratelimit.HeadersOnLimitExceeded,
+			mode:                  RateLimitHeadersOnLimitExceeded,
 			wantHeadersOnSuccess:  false,
 			wantHeadersOnExceeded: true,
 		},
 		{
 			name:                  "HeadersNever",
-			mode:                  ratelimit.HeadersNever,
+			mode:                  RateLimitHeadersNever,
 			wantHeadersOnSuccess:  false,
 			wantHeadersOnExceeded: false,
 		},
@@ -417,9 +408,9 @@ func TestHeaderModes(t *testing.T) {
 			st := store.NewMemory()
 			defer st.Close()
 
-			limiter := ratelimit.New(st, 2, time.Minute,
-				ratelimit.WithIP(),
-				ratelimit.WithHeaderMode(tt.mode),
+			limiter := NewRateLimiter(st, 2, time.Minute,
+				RateLimitWithIP(),
+				RateLimitWithHeaderMode(tt.mode),
 			)
 			handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -462,9 +453,9 @@ func TestWithName(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute,
-		ratelimit.WithName("global"),
-		ratelimit.WithIP(),
+	limiter := NewRateLimiter(st, 2, time.Minute,
+		RateLimitWithName("global"),
+		RateLimitWithIP(),
 	)
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -500,10 +491,10 @@ func TestWithName_MultiDimension(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 2, time.Minute,
-		ratelimit.WithName("api"),
-		ratelimit.WithIP(),
-		ratelimit.WithHeader("X-Tenant-ID"),
+	limiter := NewRateLimiter(st, 2, time.Minute,
+		RateLimitWithName("api"),
+		RateLimitWithIP(),
+		RateLimitWithHeader("X-Tenant-ID"),
 	)
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -532,15 +523,15 @@ func TestLayeredLimiters(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	globalLimiter := ratelimit.New(st, 5, time.Minute,
-		ratelimit.WithName("global"),
-		ratelimit.WithIP(),
+	globalLimiter := NewRateLimiter(st, 5, time.Minute,
+		RateLimitWithName("global"),
+		RateLimitWithIP(),
 	)
 
-	endpointLimiter := ratelimit.New(st, 2, time.Minute,
-		ratelimit.WithName("endpoint"),
-		ratelimit.WithIP(),
-		ratelimit.WithEndpoint(),
+	endpointLimiter := NewRateLimiter(st, 2, time.Minute,
+		RateLimitWithName("endpoint"),
+		RateLimitWithIP(),
+		RateLimitWithEndpoint(),
 	)
 
 	handler := globalLimiter.Handler(endpointLimiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -592,7 +583,7 @@ func TestConcurrentSameKey(t *testing.T) {
 		concurrency = 100
 	)
 
-	limiter := ratelimit.New(st, limit, time.Minute, ratelimit.WithIP())
+	limiter := NewRateLimiter(st, limit, time.Minute, RateLimitWithIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -665,7 +656,7 @@ func (e *errorStore) Close() error {
 func TestRateLimit_StoreError(t *testing.T) {
 	st := &errorStore{}
 
-	limiter := ratelimit.New(st, 10, time.Minute, ratelimit.WithIP())
+	limiter := NewRateLimiter(st, 10, time.Minute, RateLimitWithIP())
 	handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -696,7 +687,7 @@ func TestNoKeyDimensions_Panics(t *testing.T) {
 		}
 	}()
 
-	ratelimit.New(st, 1, time.Minute) // Should panic
+	NewRateLimiter(st, 1, time.Minute)
 }
 
 func TestWithRealIP_EdgeCases(t *testing.T) {
@@ -744,7 +735,7 @@ func TestWithRealIP_EdgeCases(t *testing.T) {
 			st := store.NewMemory()
 			defer st.Close()
 
-			limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithRealIP())
+			limiter := NewRateLimiter(st, 100, time.Minute, RateLimitWithRealIP())
 			handler := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -779,31 +770,28 @@ func TestWithWrapper_RateLimited(t *testing.T) {
 	st := store.NewMemory()
 	defer st.Close()
 
-	limiter := ratelimit.New(st, 1, time.Minute, ratelimit.WithIP())
+	limiter := NewRateLimiter(st, 1, time.Minute, RateLimitWithIP())
 
-	handler := wrapper.New()(limiter.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	handler := Handler()(limiter.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 	})))
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.1:1234"
 
-	// First request - should succeed
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("first request: expected 200, got %d", rr.Code)
 	}
 
-	// Second request - should be rate limited with wrapper error format
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusTooManyRequests {
 		t.Errorf("second request: expected 429, got %d", rr.Code)
 	}
 
-	// Verify JSON error response format
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -811,7 +799,6 @@ func TestWithWrapper_RateLimited(t *testing.T) {
 		t.Errorf("expected error type 'rate_limit_error', got %s", resp["error"].Type)
 	}
 
-	// Verify rate limit headers are set
 	if rr.Header().Get("RateLimit-Limit") != "1" {
 		t.Errorf("expected RateLimit-Limit header")
 	}

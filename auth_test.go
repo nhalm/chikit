@@ -1,13 +1,10 @@
-package auth_test
+package chikit
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/nhalm/chikit/auth"
-	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestAPIKey_Valid(t *testing.T) {
@@ -16,7 +13,7 @@ func TestAPIKey_Valid(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, ok := auth.APIKeyFromContext(r.Context())
+		key, ok := APIKeyFromContext(r.Context())
 		if !ok || key != "valid-key" {
 			t.Error("API key not found in context")
 		}
@@ -27,7 +24,7 @@ func TestAPIKey_Valid(t *testing.T) {
 	req.Header.Set("X-API-Key", "valid-key")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator)
+	middleware := APIKey(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -48,7 +45,7 @@ func TestAPIKey_Invalid(t *testing.T) {
 	req.Header.Set("X-API-Key", "invalid-key")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator)
+	middleware := APIKey(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -68,7 +65,7 @@ func TestAPIKey_Missing(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator)
+	middleware := APIKey(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -88,7 +85,7 @@ func TestAPIKey_Optional(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.WithOptionalAPIKey())
+	middleware := APIKey(validator, WithOptionalAPIKey())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -102,7 +99,7 @@ func TestAPIKey_WithCustomHeader(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, ok := auth.APIKeyFromContext(r.Context())
+		key, ok := APIKeyFromContext(r.Context())
 		if !ok || key != "secret-key" {
 			t.Error("API key not found in context")
 		}
@@ -113,7 +110,7 @@ func TestAPIKey_WithCustomHeader(t *testing.T) {
 	req.Header.Set("X-Custom-API-Key", "secret-key")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-API-Key"))
+	middleware := APIKey(validator, WithAPIKeyHeader("X-Custom-API-Key"))
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -134,7 +131,7 @@ func TestAPIKey_WithCustomHeader_WrongHeader(t *testing.T) {
 	req.Header.Set("X-API-Key", "secret-key")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-API-Key"))
+	middleware := APIKey(validator, WithAPIKeyHeader("X-Custom-API-Key"))
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -148,7 +145,7 @@ func TestAPIKey_WithMultipleOptions(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, ok := auth.APIKeyFromContext(r.Context())
+		key, ok := APIKeyFromContext(r.Context())
 		if !ok || key != "valid-key" {
 			t.Error("API key not found in context")
 		}
@@ -159,9 +156,9 @@ func TestAPIKey_WithMultipleOptions(t *testing.T) {
 	req.Header.Set("X-Custom-Key", "valid-key")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator,
-		auth.WithAPIKeyHeader("X-Custom-Key"),
-		auth.WithOptionalAPIKey(),
+	middleware := APIKey(validator,
+		WithAPIKeyHeader("X-Custom-Key"),
+		WithOptionalAPIKey(),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -176,7 +173,7 @@ func TestAPIKey_OptionalWithMissingKey(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := auth.APIKeyFromContext(r.Context()); ok {
+		if _, ok := APIKeyFromContext(r.Context()); ok {
 			t.Error("API key should not be in context when missing")
 		}
 		w.Write([]byte("ok"))
@@ -185,7 +182,7 @@ func TestAPIKey_OptionalWithMissingKey(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator, auth.WithOptionalAPIKey())
+	middleware := APIKey(validator, WithOptionalAPIKey())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -199,7 +196,7 @@ func TestBearerToken_Valid(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := auth.BearerTokenFromContext(r.Context())
+		token, ok := BearerTokenFromContext(r.Context())
 		if !ok || token != "valid-token" {
 			t.Error("Bearer token not found in context")
 		}
@@ -210,7 +207,7 @@ func TestBearerToken_Valid(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer valid-token")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -231,7 +228,7 @@ func TestBearerToken_Invalid(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -251,7 +248,7 @@ func TestBearerToken_Missing(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -272,7 +269,7 @@ func TestBearerToken_InvalidFormat(t *testing.T) {
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -293,7 +290,7 @@ func TestBearerToken_EmptyToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer ")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -313,7 +310,7 @@ func TestBearerToken_Optional(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator, auth.WithOptionalBearerToken())
+	middleware := BearerToken(validator, WithOptionalBearerToken())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -327,7 +324,7 @@ func TestBearerToken_OptionalWithMissingToken(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := auth.BearerTokenFromContext(r.Context()); ok {
+		if _, ok := BearerTokenFromContext(r.Context()); ok {
 			t.Error("Bearer token should not be in context when missing")
 		}
 		w.Write([]byte("ok"))
@@ -336,7 +333,7 @@ func TestBearerToken_OptionalWithMissingToken(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator, auth.WithOptionalBearerToken())
+	middleware := BearerToken(validator, WithOptionalBearerToken())
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -356,7 +353,7 @@ func TestAPIKey_WithWrapper_MissingKey(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(auth.APIKey(validator)(handler))
+	chain := Handler()(APIKey(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -367,7 +364,7 @@ func TestAPIKey_WithWrapper_MissingKey(t *testing.T) {
 		t.Errorf("expected Content-Type application/json, got %s", ct)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -393,14 +390,14 @@ func TestAPIKey_WithWrapper_InvalidKey(t *testing.T) {
 	req.Header.Set("X-API-Key", "invalid-key")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(auth.APIKey(validator)(handler))
+	chain := Handler()(APIKey(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -422,14 +419,14 @@ func TestBearerToken_WithWrapper_Missing(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(auth.BearerToken(validator)(handler))
+	chain := Handler()(BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -455,14 +452,14 @@ func TestBearerToken_WithWrapper_InvalidFormat(t *testing.T) {
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(auth.BearerToken(validator)(handler))
+	chain := Handler()(BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -485,14 +482,14 @@ func TestBearerToken_WithWrapper_InvalidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(auth.BearerToken(validator)(handler))
+	chain := Handler()(BearerToken(validator)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -515,7 +512,7 @@ func TestAPIKey_WhitespaceOnly(t *testing.T) {
 	req.Header.Set("X-API-Key", "   ")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.APIKey(validator)
+	middleware := APIKey(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -536,7 +533,7 @@ func TestBearerToken_LowercaseBearer(t *testing.T) {
 	req.Header.Set("Authorization", "bearer valid-token")
 	rec := httptest.NewRecorder()
 
-	middleware := auth.BearerToken(validator)
+	middleware := BearerToken(validator)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {

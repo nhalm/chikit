@@ -1,4 +1,4 @@
-package slo_test
+package chikit
 
 import (
 	"net/http"
@@ -7,33 +7,32 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/nhalm/chikit/slo"
 )
 
 func TestTrack_SetsTierInContext(t *testing.T) {
 	tests := []struct {
 		name           string
-		tier           slo.Tier
-		expectedTier   slo.Tier
+		tier           SLOTier
+		expectedTier   SLOTier
 		expectedTarget time.Duration
 	}{
-		{"Critical", slo.Critical, slo.Critical, 50 * time.Millisecond},
-		{"HighFast", slo.HighFast, slo.HighFast, 100 * time.Millisecond},
-		{"HighSlow", slo.HighSlow, slo.HighSlow, 1000 * time.Millisecond},
-		{"Low", slo.Low, slo.Low, 5000 * time.Millisecond},
+		{"Critical", SLOCritical, SLOCritical, 50 * time.Millisecond},
+		{"HighFast", SLOHighFast, SLOHighFast, 100 * time.Millisecond},
+		{"HighSlow", SLOHighSlow, SLOHighSlow, 1000 * time.Millisecond},
+		{"Low", SLOLow, SLOLow, 5000 * time.Millisecond},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var capturedTier slo.Tier
+			var capturedTier SLOTier
 			var capturedTarget time.Duration
 			var found bool
 
 			handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-				capturedTier, capturedTarget, found = slo.GetTier(r.Context())
+				capturedTier, capturedTarget, found = GetSLO(r.Context())
 			})
 
-			middleware := slo.Track(tt.tier)
+			middleware := SLO(tt.tier)
 			tracked := middleware(handler)
 
 			req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -58,15 +57,15 @@ func TestTrack_SetsTierInContext(t *testing.T) {
 func TestTrackWithTarget_SetsCustomTarget(t *testing.T) {
 	customTarget := 200 * time.Millisecond
 
-	var capturedTier slo.Tier
+	var capturedTier SLOTier
 	var capturedTarget time.Duration
 	var found bool
 
 	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		capturedTier, capturedTarget, found = slo.GetTier(r.Context())
+		capturedTier, capturedTarget, found = GetSLO(r.Context())
 	})
 
-	middleware := slo.TrackWithTarget(customTarget)
+	middleware := SLOWithTarget(customTarget)
 	tracked := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/test", http.NoBody)
@@ -88,7 +87,7 @@ func TestTrackWithTarget_SetsCustomTarget(t *testing.T) {
 
 func TestGetTier_NoContext(t *testing.T) {
 	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		tier, target, found := slo.GetTier(r.Context())
+		tier, target, found := GetSLO(r.Context())
 		if found {
 			t.Error("expected SLO tier to not be found in context")
 		}
@@ -106,13 +105,13 @@ func TestGetTier_NoContext(t *testing.T) {
 }
 
 func TestTrack_WithChiRouter(t *testing.T) {
-	var capturedTier slo.Tier
+	var capturedTier SLOTier
 	var capturedTarget time.Duration
 	var found bool
 
 	r := chi.NewRouter()
-	r.With(slo.Track(slo.HighFast)).Get("/users/{id}", func(_ http.ResponseWriter, r *http.Request) {
-		capturedTier, capturedTarget, found = slo.GetTier(r.Context())
+	r.With(SLO(SLOHighFast)).Get("/users/{id}", func(_ http.ResponseWriter, r *http.Request) {
+		capturedTier, capturedTarget, found = GetSLO(r.Context())
 	})
 
 	req := httptest.NewRequest("GET", "/users/123", http.NoBody)
@@ -123,8 +122,8 @@ func TestTrack_WithChiRouter(t *testing.T) {
 		t.Fatal("expected SLO tier to be set in context")
 	}
 
-	if capturedTier != slo.HighFast {
-		t.Errorf("expected tier %s, got %s", slo.HighFast, capturedTier)
+	if capturedTier != SLOHighFast {
+		t.Errorf("expected tier %s, got %s", SLOHighFast, capturedTier)
 	}
 
 	if capturedTarget != 100*time.Millisecond {
@@ -135,18 +134,18 @@ func TestTrack_WithChiRouter(t *testing.T) {
 func TestTrack_DifferentRoutesHaveDifferentSLOs(t *testing.T) {
 	r := chi.NewRouter()
 
-	var healthTier, usersTier, reportsTier slo.Tier
+	var healthTier, usersTier, reportsTier SLOTier
 
-	r.With(slo.Track(slo.Critical)).Get("/health", func(_ http.ResponseWriter, r *http.Request) {
-		healthTier, _, _ = slo.GetTier(r.Context())
+	r.With(SLO(SLOCritical)).Get("/health", func(_ http.ResponseWriter, r *http.Request) {
+		healthTier, _, _ = GetSLO(r.Context())
 	})
 
-	r.With(slo.Track(slo.HighFast)).Get("/users/{id}", func(_ http.ResponseWriter, r *http.Request) {
-		usersTier, _, _ = slo.GetTier(r.Context())
+	r.With(SLO(SLOHighFast)).Get("/users/{id}", func(_ http.ResponseWriter, r *http.Request) {
+		usersTier, _, _ = GetSLO(r.Context())
 	})
 
-	r.With(slo.Track(slo.HighSlow)).Post("/reports", func(_ http.ResponseWriter, r *http.Request) {
-		reportsTier, _, _ = slo.GetTier(r.Context())
+	r.With(SLO(SLOHighSlow)).Post("/reports", func(_ http.ResponseWriter, r *http.Request) {
+		reportsTier, _, _ = GetSLO(r.Context())
 	})
 
 	req := httptest.NewRequest("GET", "/health", http.NoBody)
@@ -158,14 +157,14 @@ func TestTrack_DifferentRoutesHaveDifferentSLOs(t *testing.T) {
 	req = httptest.NewRequest("POST", "/reports", http.NoBody)
 	r.ServeHTTP(httptest.NewRecorder(), req)
 
-	if healthTier != slo.Critical {
-		t.Errorf("expected health tier %s, got %s", slo.Critical, healthTier)
+	if healthTier != SLOCritical {
+		t.Errorf("expected health tier %s, got %s", SLOCritical, healthTier)
 	}
-	if usersTier != slo.HighFast {
-		t.Errorf("expected users tier %s, got %s", slo.HighFast, usersTier)
+	if usersTier != SLOHighFast {
+		t.Errorf("expected users tier %s, got %s", SLOHighFast, usersTier)
 	}
-	if reportsTier != slo.HighSlow {
-		t.Errorf("expected reports tier %s, got %s", slo.HighSlow, reportsTier)
+	if reportsTier != SLOHighSlow {
+		t.Errorf("expected reports tier %s, got %s", SLOHighSlow, reportsTier)
 	}
 }
 
@@ -174,12 +173,12 @@ func TestTrack_RouteWithoutSLO(t *testing.T) {
 
 	var withSLOFound, withoutSLOFound bool
 
-	r.With(slo.Track(slo.HighFast)).Get("/with-slo", func(_ http.ResponseWriter, r *http.Request) {
-		_, _, withSLOFound = slo.GetTier(r.Context())
+	r.With(SLO(SLOHighFast)).Get("/with-slo", func(_ http.ResponseWriter, r *http.Request) {
+		_, _, withSLOFound = GetSLO(r.Context())
 	})
 
 	r.Get("/without-slo", func(_ http.ResponseWriter, r *http.Request) {
-		_, _, withoutSLOFound = slo.GetTier(r.Context())
+		_, _, withoutSLOFound = GetSLO(r.Context())
 	})
 
 	req := httptest.NewRequest("GET", "/with-slo", http.NoBody)
@@ -197,16 +196,16 @@ func TestTrack_RouteWithoutSLO(t *testing.T) {
 }
 
 func TestTierConstants(t *testing.T) {
-	if slo.Critical != "critical" {
-		t.Errorf("expected Critical = 'critical', got %s", slo.Critical)
+	if SLOCritical != "critical" {
+		t.Errorf("expected Critical = 'critical', got %s", SLOCritical)
 	}
-	if slo.HighFast != "high_fast" {
-		t.Errorf("expected HighFast = 'high_fast', got %s", slo.HighFast)
+	if SLOHighFast != "high_fast" {
+		t.Errorf("expected HighFast = 'high_fast', got %s", SLOHighFast)
 	}
-	if slo.HighSlow != "high_slow" {
-		t.Errorf("expected HighSlow = 'high_slow', got %s", slo.HighSlow)
+	if SLOHighSlow != "high_slow" {
+		t.Errorf("expected HighSlow = 'high_slow', got %s", SLOHighSlow)
 	}
-	if slo.Low != "low" {
-		t.Errorf("expected Low = 'low', got %s", slo.Low)
+	if SLOLow != "low" {
+		t.Errorf("expected Low = 'low', got %s", SLOLow)
 	}
 }

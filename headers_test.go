@@ -1,4 +1,4 @@
-package headers
+package chikit
 
 import (
 	"context"
@@ -7,13 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/nhalm/chikit/wrapper"
 )
-
-type errorResponse struct {
-	Error *wrapper.Error `json:"error"`
-}
 
 func TestBasicHeaderExtraction(t *testing.T) {
 	tests := []struct {
@@ -39,7 +33,7 @@ func TestBasicHeaderExtraction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var capturedCtx context.Context
-			handler := New("X-Custom-Header", "custom_key")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := ExtractHeader("X-Custom-Header", "custom_key")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				capturedCtx = r.Context()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -56,7 +50,7 @@ func TestBasicHeaderExtraction(t *testing.T) {
 				t.Errorf("status = %d, want %d", rr.Code, tt.wantStatus)
 			}
 
-			val, ok := FromContext(capturedCtx, "custom_key")
+			val, ok := HeaderFromContext(capturedCtx, "custom_key")
 			if ok != tt.wantInCtx {
 				t.Errorf("value in context = %v, want %v", ok, tt.wantInCtx)
 			}
@@ -91,7 +85,7 @@ func TestRequiredHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := New("X-Required-Header", "required_key", WithRequired())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handler := ExtractHeader("X-Required-Header", "required_key", ExtractRequired())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
@@ -141,7 +135,7 @@ func TestDefaultValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var capturedCtx context.Context
-			handler := New("X-Header", "key", WithDefault(tt.defaultVal))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := ExtractHeader("X-Header", "key", ExtractDefault(tt.defaultVal))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				capturedCtx = r.Context()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -158,7 +152,7 @@ func TestDefaultValues(t *testing.T) {
 				t.Errorf("status = %d, want %d", rr.Code, tt.wantStatus)
 			}
 
-			val, ok := FromContext(capturedCtx, "key")
+			val, ok := HeaderFromContext(capturedCtx, "key")
 			if !ok {
 				t.Fatal("expected value in context")
 			}
@@ -205,7 +199,7 @@ func TestValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var capturedCtx context.Context
-			handler := New("X-Validated", "validated_key", WithValidator(tt.validator))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := ExtractHeader("X-Validated", "validated_key", ExtractWithValidator(tt.validator))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				capturedCtx = r.Context()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -225,7 +219,7 @@ func TestValidation(t *testing.T) {
 			}
 
 			if tt.wantStatus == http.StatusOK {
-				val, ok := FromContext(capturedCtx, "validated_key")
+				val, ok := HeaderFromContext(capturedCtx, "validated_key")
 				if !ok {
 					t.Fatal("expected value in context")
 				}
@@ -250,7 +244,7 @@ func TestFromContext(t *testing.T) {
 		{
 			name: "value exists",
 			setupCtx: func() context.Context {
-				return context.WithValue(context.Background(), contextKey("test_key"), "test_value")
+				return context.WithValue(context.Background(), headerContextKey("test_key"), "test_value")
 			},
 			key:       "test_key",
 			wantVal:   "test_value",
@@ -279,7 +273,7 @@ func TestFromContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := tt.setupCtx()
-			val, ok := FromContext(ctx, tt.key)
+			val, ok := HeaderFromContext(ctx, tt.key)
 
 			if ok != tt.wantFound {
 				t.Errorf("found = %v, want %v", ok, tt.wantFound)
@@ -302,27 +296,27 @@ func TestMultipleOptions(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		opts       []Option
+		opts       []HeaderExtractorOption
 		headerVal  string
 		wantStatus int
 		wantCtxVal any
 	}{
 		{
 			name:       "required with validator success",
-			opts:       []Option{WithRequired(), WithValidator(validator)},
+			opts:       []HeaderExtractorOption{ExtractRequired(), ExtractWithValidator(validator)},
 			headerVal:  "valid",
 			wantStatus: http.StatusOK,
 			wantCtxVal: "transformed",
 		},
 		{
 			name:       "required with validator failure",
-			opts:       []Option{WithRequired(), WithValidator(validator)},
+			opts:       []HeaderExtractorOption{ExtractRequired(), ExtractWithValidator(validator)},
 			headerVal:  "invalid",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "default with validator success",
-			opts:       []Option{WithDefault("valid"), WithValidator(validator)},
+			opts:       []HeaderExtractorOption{ExtractDefault("valid"), ExtractWithValidator(validator)},
 			headerVal:  "",
 			wantStatus: http.StatusOK,
 			wantCtxVal: "transformed",
@@ -332,7 +326,7 @@ func TestMultipleOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var capturedCtx context.Context
-			handler := New("X-Multi", "multi_key", tt.opts...)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := ExtractHeader("X-Multi", "multi_key", tt.opts...)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				capturedCtx = r.Context()
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -350,7 +344,7 @@ func TestMultipleOptions(t *testing.T) {
 			}
 
 			if tt.wantStatus == http.StatusOK {
-				val, ok := FromContext(capturedCtx, "multi_key")
+				val, ok := HeaderFromContext(capturedCtx, "multi_key")
 				if !ok {
 					t.Fatal("expected value in context")
 				}
@@ -365,8 +359,8 @@ func TestMultipleOptions(t *testing.T) {
 func TestChainedMiddleware(t *testing.T) {
 	var capturedCtx context.Context
 
-	middleware1 := New("X-Header-1", "key1")
-	middleware2 := New("X-Header-2", "key2")
+	middleware1 := ExtractHeader("X-Header-1", "key1")
+	middleware2 := ExtractHeader("X-Header-2", "key2")
 
 	handler := middleware1(middleware2(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedCtx = r.Context()
@@ -384,12 +378,12 @@ func TestChainedMiddleware(t *testing.T) {
 		t.Errorf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
 
-	val1, ok1 := FromContext(capturedCtx, "key1")
+	val1, ok1 := HeaderFromContext(capturedCtx, "key1")
 	if !ok1 || val1 != "value1" {
 		t.Errorf("key1: got (%v, %v), want (value1, true)", val1, ok1)
 	}
 
-	val2, ok2 := FromContext(capturedCtx, "key2")
+	val2, ok2 := HeaderFromContext(capturedCtx, "key2")
 	if !ok2 || val2 != "value2" {
 		t.Errorf("key2: got (%v, %v), want (value2, true)", val2, ok2)
 	}
@@ -400,7 +394,7 @@ func TestHeaders_ValidatorPanic(t *testing.T) {
 		panic("validator panic")
 	}
 
-	handler := New("X-Panic", "panic_key", WithValidator(panicValidator))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := ExtractHeader("X-Panic", "panic_key", ExtractWithValidator(panicValidator))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -443,8 +437,8 @@ func TestWrapperIntegration_RequiredHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			headerMiddleware := New("X-Required-Header", "required_key", WithRequired())
-			handler := wrapper.New()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			headerMiddleware := ExtractHeader("X-Required-Header", "required_key", ExtractRequired())
+			handler := Handler()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})))
 
@@ -507,8 +501,8 @@ func TestWrapperIntegration_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			headerMiddleware := New("X-Validated", "validated_key", WithValidator(intValidator))
-			handler := wrapper.New()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			headerMiddleware := ExtractHeader("X-Validated", "validated_key", ExtractWithValidator(intValidator))
+			handler := Handler()(headerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})))
 
