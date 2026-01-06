@@ -29,27 +29,27 @@ go get github.com/nhalm/chikit
 
 ## Response Wrapper
 
-The wrapper package provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and Stripe-style structured errors.
+The wrapper provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and Stripe-style structured errors.
 
 ### Basic Usage
 
 ```go
 import (
     "github.com/go-chi/chi/v5"
-    "github.com/nhalm/chikit/wrapper"
+    "github.com/nhalm/chikit"
 )
 
 func main() {
     r := chi.NewRouter()
-    r.Use(wrapper.New())  // Must be outermost middleware
+    r.Use(chikit.Handler())  // Must be outermost middleware
 
     r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
         user, err := createUser(r)
         if err != nil {
-            wrapper.SetError(r, wrapper.ErrInternal.With("Failed to create user"))
+            chikit.SetError(r, chikit.ErrInternal.With("Failed to create user"))
             return
         }
-        wrapper.SetResponse(r, http.StatusCreated, user)
+        chikit.SetResponse(r, http.StatusCreated, user)
     })
 }
 ```
@@ -60,26 +60,26 @@ Errors follow Stripe's API error format:
 
 ```go
 // Predefined sentinel errors
-wrapper.ErrBadRequest          // 400
-wrapper.ErrUnauthorized        // 401
-wrapper.ErrPaymentRequired     // 402
-wrapper.ErrForbidden           // 403
-wrapper.ErrNotFound            // 404
-wrapper.ErrMethodNotAllowed    // 405
-wrapper.ErrConflict            // 409
-wrapper.ErrGone                // 410
-wrapper.ErrPayloadTooLarge     // 413
-wrapper.ErrUnprocessableEntity // 422
-wrapper.ErrRateLimited         // 429
-wrapper.ErrInternal            // 500
-wrapper.ErrNotImplemented      // 501
-wrapper.ErrServiceUnavailable  // 503
+chikit.ErrBadRequest          // 400
+chikit.ErrUnauthorized        // 401
+chikit.ErrPaymentRequired     // 402
+chikit.ErrForbidden           // 403
+chikit.ErrNotFound            // 404
+chikit.ErrMethodNotAllowed    // 405
+chikit.ErrConflict            // 409
+chikit.ErrGone                // 410
+chikit.ErrPayloadTooLarge     // 413
+chikit.ErrUnprocessableEntity // 422
+chikit.ErrRateLimited         // 429
+chikit.ErrInternal            // 500
+chikit.ErrNotImplemented      // 501
+chikit.ErrServiceUnavailable  // 503
 
 // Customize message
-wrapper.SetError(r, wrapper.ErrNotFound.With("User not found"))
+chikit.SetError(r, chikit.ErrNotFound.With("User not found"))
 
 // Customize message and parameter
-wrapper.SetError(r, wrapper.ErrBadRequest.WithParam("Invalid email format", "email"))
+chikit.SetError(r, chikit.ErrBadRequest.WithParam("Invalid email format", "email"))
 ```
 
 JSON response format:
@@ -99,7 +99,7 @@ JSON response format:
 For multiple field errors:
 
 ```go
-wrapper.SetError(r, wrapper.NewValidationError([]wrapper.FieldError{
+chikit.SetError(r, chikit.NewValidationError([]chikit.FieldError{
     {Param: "email", Code: "required", Message: "Email is required"},
     {Param: "age", Code: "min", Message: "Age must be at least 18"},
 }))
@@ -124,10 +124,10 @@ JSON response:
 ### Setting Headers
 
 ```go
-wrapper.SetHeader(r, "X-Request-ID", requestID)
-wrapper.SetHeader(r, "X-RateLimit-Remaining", "99")
-wrapper.AddHeader(r, "X-Custom", "value1")
-wrapper.AddHeader(r, "X-Custom", "value2")  // Adds second value
+chikit.SetHeader(r, "X-Request-ID", requestID)
+chikit.SetHeader(r, "X-RateLimit-Remaining", "99")
+chikit.AddHeader(r, "X-Custom", "value1")
+chikit.AddHeader(r, "X-Custom", "value2")  // Adds second value
 ```
 
 ### Dual-Mode Middleware
@@ -138,8 +138,8 @@ Middleware can check if wrapper is present and fall back gracefully:
 func MyMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         if err := validate(r); err != nil {
-            if wrapper.HasState(r.Context()) {
-                wrapper.SetError(r, wrapper.ErrBadRequest.With(err.Error()))
+            if chikit.HasState(r.Context()) {
+                chikit.SetError(r, chikit.ErrBadRequest.With(err.Error()))
             } else {
                 http.Error(w, err.Error(), http.StatusBadRequest)
             }
@@ -155,7 +155,7 @@ func MyMiddleware(next http.Handler) http.Handler {
 The Handler middleware automatically recovers from panics and returns a 500 error:
 
 ```go
-r.Use(wrapper.New())
+r.Use(chikit.Handler())
 
 r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("something went wrong")  // Returns {"error": {"type": "internal_error", ...}}
@@ -173,9 +173,9 @@ func main() {
     canonlog.SetupGlobalLogger("info", "json")
 
     r := chi.NewRouter()
-    r.Use(wrapper.New(
-        wrapper.WithCanonlog(),
-        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+    r.Use(chikit.Handler(
+        chikit.WithCanonlog(),
+        chikit.WithCanonlogFields(func(r *http.Request) map[string]any {
             return map[string]any{
                 "request_id": r.Header.Get("X-Request-ID"),
                 "tenant_id":  r.Header.Get("X-Tenant-ID"),
@@ -206,8 +206,8 @@ Enable SLO status logging with `WithSLOs()`. See [SLO Tracking](#slo-tracking) f
 ```go
 import (
     "github.com/go-chi/chi/v5"
-    "github.com/nhalm/chikit/ratelimit"
-    "github.com/nhalm/chikit/ratelimit/store"
+    "github.com/nhalm/chikit"
+    "github.com/nhalm/chikit/store"
     "time"
 )
 
@@ -219,13 +219,13 @@ func main() {
     defer st.Close()
 
     // Rate limit by IP: 100 requests per minute
-    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithIP()).Handler)
+    r.Use(chikit.NewRateLimiter(st, 100, 1*time.Minute, chikit.RateLimitWithIP()).Handler)
 
     // Rate limit by header (skip if header missing)
-    r.Use(ratelimit.New(st, 1000, 1*time.Hour, ratelimit.WithHeader("X-API-Key")).Handler)
+    r.Use(chikit.NewRateLimiter(st, 1000, 1*time.Hour, chikit.RateLimitWithHeader("X-API-Key")).Handler)
 
     // Rate limit by endpoint
-    r.Use(ratelimit.New(st, 100, 1*time.Minute, ratelimit.WithEndpoint()).Handler)
+    r.Use(chikit.NewRateLimiter(st, 100, 1*time.Minute, chikit.RateLimitWithEndpoint()).Handler)
 }
 ```
 
@@ -235,25 +235,25 @@ Combine multiple key dimensions for fine-grained control:
 
 ```go
 // Rate limit by IP + endpoint combination
-limiter := ratelimit.New(st, 100, 1*time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithEndpoint(),
+limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithEndpoint(),
 )
 r.Use(limiter.Handler)
 
 // Rate limit by IP + tenant header (reject if header missing)
-limiter := ratelimit.New(st, 1000, 1*time.Hour,
-    ratelimit.WithIP(),
-    ratelimit.WithHeaderRequired("X-Tenant-ID"),
+limiter := chikit.NewRateLimiter(st, 1000, 1*time.Hour,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithHeaderRequired("X-Tenant-ID"),
 )
 r.Use(limiter.Handler)
 
 // Complex multi-dimensional rate limiting
-limiter := ratelimit.New(st, 50, 1*time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithEndpoint(),
-    ratelimit.WithHeaderRequired("X-API-Key"),
-    ratelimit.WithQueryParam("user_id"),
+limiter := chikit.NewRateLimiter(st, 50, 1*time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithEndpoint(),
+    chikit.RateLimitWithHeaderRequired("X-API-Key"),
+    chikit.RateLimitWithQueryParam("user_id"),
 )
 r.Use(limiter.Handler)
 ```
@@ -262,15 +262,15 @@ r.Use(limiter.Handler)
 
 | Option | Description |
 |--------|-------------|
-| `WithIP()` | Client IP from RemoteAddr (direct connections) |
-| `WithRealIP()` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
-| `WithRealIPRequired()` | Same as WithRealIP, but returns 400 if missing |
-| `WithEndpoint()` | HTTP method + path (e.g., `GET:/api/users`) |
-| `WithHeader(name)` | Header value (skip if missing) |
-| `WithHeaderRequired(name)` | Header value (400 if missing) |
-| `WithQueryParam(name)` | Query parameter value (skip if missing) |
-| `WithQueryParamRequired(name)` | Query parameter value (400 if missing) |
-| `WithName(name)` | Key prefix for collision prevention |
+| `RateLimitWithIP()` | Client IP from RemoteAddr (direct connections) |
+| `RateLimitWithRealIP()` | Client IP from X-Forwarded-For/X-Real-IP (behind proxy) |
+| `RateLimitWithRealIPRequired()` | Same as RateLimitWithRealIP, but returns 400 if missing |
+| `RateLimitWithEndpoint()` | HTTP method + path (e.g., `GET:/api/users`) |
+| `RateLimitWithHeader(name)` | Header value (skip if missing) |
+| `RateLimitWithHeaderRequired(name)` | Header value (400 if missing) |
+| `RateLimitWithQueryParam(name)` | Query parameter value (skip if missing) |
+| `RateLimitWithQueryParamRequired(name)` | Query parameter value (400 if missing) |
+| `RateLimitWithName(name)` | Key prefix for collision prevention |
 
 The `*Required` variants return 400 Bad Request if the value is missing.
 The non-required variants skip rate limiting for that request if the value is missing.
@@ -285,8 +285,8 @@ import (
     "time"
 
     "github.com/go-chi/chi/v5"
-    "github.com/nhalm/chikit/ratelimit"
-    "github.com/nhalm/chikit/ratelimit/store"
+    "github.com/nhalm/chikit"
+    "github.com/nhalm/chikit/store"
 )
 
 func main() {
@@ -300,7 +300,7 @@ func main() {
     defer st.Close()
 
     r := chi.NewRouter()
-    r.Use(ratelimit.New(st, 100, time.Minute, ratelimit.WithIP()).Handler)
+    r.Use(chikit.NewRateLimiter(st, 100, time.Minute, chikit.RateLimitWithIP()).Handler)
 }
 ```
 
@@ -319,43 +319,43 @@ Header behavior can be configured:
 
 ```go
 // Always include headers (default)
-limiter := ratelimit.New(st, 100, 1*time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithHeaderMode(ratelimit.HeadersAlways),
+limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithHeaderMode(chikit.HeadersAlways),
 )
 
 // Include headers only on 429 responses
-limiter := ratelimit.New(st, 100, 1*time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithHeaderMode(ratelimit.HeadersOnLimitExceeded),
+limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithHeaderMode(chikit.HeadersOnLimitExceeded),
 )
 
 // Never include headers
-limiter := ratelimit.New(st, 100, 1*time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithHeaderMode(ratelimit.HeadersNever),
+limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithHeaderMode(chikit.HeadersNever),
 )
 ```
 
 ### Layered Rate Limiting
 
-When applying multiple rate limiters to the same routes, use `WithName()` to prevent key collisions:
+When applying multiple rate limiters to the same routes, use `RateLimitWithName()` to prevent key collisions:
 
 ```go
 st := store.NewMemory()
 defer st.Close()
 
 // Global limit: 1000 requests per hour per IP
-globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
-    ratelimit.WithName("global"),
-    ratelimit.WithIP(),
+globalLimiter := chikit.NewRateLimiter(st, 1000, 1*time.Hour,
+    chikit.RateLimitWithName("global"),
+    chikit.RateLimitWithIP(),
 )
 
 // Endpoint-specific limit: 10 requests per minute per IP+endpoint
-endpointLimiter := ratelimit.New(st, 10, 1*time.Minute,
-    ratelimit.WithName("endpoint"),
-    ratelimit.WithIP(),
-    ratelimit.WithEndpoint(),
+endpointLimiter := chikit.NewRateLimiter(st, 10, 1*time.Minute,
+    chikit.RateLimitWithName("endpoint"),
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithEndpoint(),
 )
 
 // Apply both limiters
@@ -363,13 +363,13 @@ r.Use(globalLimiter.Handler)
 r.Use(endpointLimiter.Handler)
 ```
 
-Without `WithName()`, the keys would collide because both limiters use `WithIP()`. The name is prepended to the key:
+Without `RateLimitWithName()`, the keys would collide because both limiters use `RateLimitWithIP()`. The name is prepended to the key:
 
 ```
-// Without WithName():
+// Without RateLimitWithName():
 192.168.1.1                           // Both limiters use this key - collision!
 
-// With WithName():
+// With RateLimitWithName():
 global:192.168.1.1                    // Global limiter
 endpoint:192.168.1.1:GET:/api/users   // Endpoint limiter - independent
 ```
@@ -378,27 +378,27 @@ This pattern is useful for implementing tiered rate limits:
 
 ```go
 // Tier 1: Broad protection (DDoS prevention)
-ddosLimiter := ratelimit.New(st, 10000, 1*time.Hour,
-    ratelimit.WithName("ddos"),
-    ratelimit.WithIP(),
+ddosLimiter := chikit.NewRateLimiter(st, 10000, 1*time.Hour,
+    chikit.RateLimitWithName("ddos"),
+    chikit.RateLimitWithIP(),
 )
 r.Use(ddosLimiter.Handler)
 
 // Tier 2: API endpoint protection
 r.Route("/api", func(r chi.Router) {
-    apiLimiter := ratelimit.New(st, 100, 1*time.Minute,
-        ratelimit.WithName("api"),
-        ratelimit.WithIP(),
-        ratelimit.WithEndpoint(),
+    apiLimiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+        chikit.RateLimitWithName("api"),
+        chikit.RateLimitWithIP(),
+        chikit.RateLimitWithEndpoint(),
     )
     r.Use(apiLimiter.Handler)
 })
 
 // Tier 3: Expensive operation protection
 r.Route("/api/analytics/run", func(r chi.Router) {
-    analyticsLimiter := ratelimit.New(st, 5, 1*time.Hour,
-        ratelimit.WithName("analytics"),
-        ratelimit.WithHeaderRequired("X-User-ID"),
+    analyticsLimiter := chikit.NewRateLimiter(st, 5, 1*time.Hour,
+        chikit.RateLimitWithName("analytics"),
+        chikit.RateLimitWithHeaderRequired("X-User-ID"),
     )
     r.Use(analyticsLimiter.Handler)
     r.Post("/", analyticsHandler)
@@ -412,15 +412,15 @@ r.Route("/api/analytics/run", func(r chi.Router) {
 Extract any header with validation:
 
 ```go
-import "github.com/nhalm/chikit/headers"
+import "github.com/nhalm/chikit"
 
 // Simple header extraction
-r.Use(headers.New("X-API-Key", "api_key"))
+r.Use(chikit.ExtractHeader("X-API-Key", "api_key"))
 
 // With validation
-r.Use(headers.New("X-Correlation-ID", "correlation_id",
-    headers.WithRequired(),
-    headers.WithValidator(func(val string) (any, error) {
+r.Use(chikit.ExtractHeader("X-Correlation-ID", "correlation_id",
+    chikit.ExtractRequired(),
+    chikit.ExtractWithValidator(func(val string) (any, error) {
         if len(val) < 10 {
             return nil, errors.New("correlation ID too short")
         }
@@ -429,13 +429,13 @@ r.Use(headers.New("X-Correlation-ID", "correlation_id",
 ))
 
 // With default value
-r.Use(headers.New("X-Environment", "environment",
-    headers.WithDefault("production"),
+r.Use(chikit.ExtractHeader("X-Environment", "environment",
+    chikit.ExtractWithDefault("production"),
 ))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
-    apiKey, ok := headers.FromContext(r.Context(), "api_key")
+    apiKey, ok := chikit.HeaderFromContext(r.Context(), "api_key")
     if !ok {
         http.Error(w, "No API key", http.StatusUnauthorized)
         return
@@ -448,20 +448,20 @@ func handler(w http.ResponseWriter, r *http.Request) {
 ```go
 import (
     "github.com/google/uuid"
-    "github.com/nhalm/chikit/headers"
+    "github.com/nhalm/chikit"
 )
 
 // Extract X-Tenant-ID header as UUID with validation
-r.Use(headers.New("X-Tenant-ID", "tenant_id",
-    headers.WithRequired(),
-    headers.WithValidator(func(val string) (any, error) {
+r.Use(chikit.ExtractHeader("X-Tenant-ID", "tenant_id",
+    chikit.ExtractRequired(),
+    chikit.ExtractWithValidator(func(val string) (any, error) {
         return uuid.Parse(val)
     }),
 ))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
-    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    val, ok := chikit.HeaderFromContext(r.Context(), "tenant_id")
     if !ok {
         http.Error(w, "No tenant ID", http.StatusBadRequest)
         return
@@ -478,10 +478,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 Prevent DoS attacks by limiting request body size:
 
 ```go
-import "github.com/nhalm/chikit/validate"
+import "github.com/nhalm/chikit"
 
 // Limit request body to 1MB
-r.Use(validate.MaxBodySize(1024 * 1024))
+r.Use(chikit.MaxBodySize(1024 * 1024))
 ```
 
 The middleware provides two-stage protection:
@@ -489,7 +489,7 @@ The middleware provides two-stage protection:
 1. **Content-Length check**: Requests with `Content-Length` exceeding the limit are rejected with 413 immediately, before the handler runs
 2. **MaxBytesReader wrapper**: All request bodies are wrapped with `http.MaxBytesReader` as defense-in-depth, catching chunked transfers and requests with missing/incorrect Content-Length headers
 
-When using `bind.JSON`, the second stage is automatic - if the body exceeds the limit during decoding, `bind.JSON` detects the error and returns `wrapper.ErrPayloadTooLarge` (413).
+When using `chikit.JSON`, the second stage is automatic - if the body exceeds the limit during decoding, `chikit.JSON` detects the error and returns `chikit.ErrPayloadTooLarge` (413).
 
 ### Header Validation
 
@@ -497,51 +497,48 @@ Validate headers with allow/deny lists:
 
 ```go
 // Required header
-r.Use(validate.NewHeaders(
-    validate.WithHeader("X-API-Key", validate.WithRequired()),
+r.Use(chikit.ValidateHeaders(
+    chikit.ValidateHeader("X-API-Key", chikit.ValidateRequired()),
 ))
 
 // Allow list (only specific values allowed)
-r.Use(validate.NewHeaders(
-    validate.WithHeader("X-Environment",
-        validate.WithAllowList("production", "staging", "development"),
+r.Use(chikit.ValidateHeaders(
+    chikit.ValidateHeader("X-Environment",
+        chikit.ValidateAllowList("production", "staging", "development"),
     ),
 ))
 
 // Deny list (block specific values)
-r.Use(validate.NewHeaders(
-    validate.WithHeader("X-Source",
-        validate.WithDenyList("blocked-client", "banned-user"),
+r.Use(chikit.ValidateHeaders(
+    chikit.ValidateHeader("X-Source",
+        chikit.ValidateDenyList("blocked-client", "banned-user"),
     ),
 ))
 
 // Case-sensitive validation (default: case-insensitive)
-r.Use(validate.NewHeaders(
-    validate.WithHeader("X-Auth-Token",
-        validate.WithAllowList("Bearer", "Basic"),
-        validate.WithCaseSensitive(),
+r.Use(chikit.ValidateHeaders(
+    chikit.ValidateHeader("X-Auth-Token",
+        chikit.ValidateAllowList("Bearer", "Basic"),
+        chikit.ValidateCaseSensitive(),
     ),
 ))
 
 // Multiple header rules
-r.Use(validate.NewHeaders(
-    validate.WithHeader("X-API-Key", validate.WithRequired()),
-    validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
-    validate.WithHeader("X-Source", validate.WithDenyList("blocked")),
+r.Use(chikit.ValidateHeaders(
+    chikit.ValidateHeader("X-API-Key", chikit.ValidateRequired()),
+    chikit.ValidateHeader("X-Environment", chikit.ValidateAllowList("production", "staging")),
+    chikit.ValidateHeader("X-Source", chikit.ValidateDenyList("blocked")),
 ))
 ```
 
 ## Request Binding
 
-The bind package provides JSON body and query parameter binding with validation using go-playground/validator/v10.
+The bind functions provide JSON body and query parameter binding with validation using go-playground/validator/v10.
 
 ### JSON Binding
 
 ```go
-import (
-    "github.com/nhalm/chikit/bind"
-    "github.com/nhalm/chikit/wrapper"
-)
+import "github.com/nhalm/chikit"
 
 type CreateUserRequest struct {
     Email string `json:"email" validate:"required,email"`
@@ -551,16 +548,16 @@ type CreateUserRequest struct {
 
 func main() {
     r := chi.NewRouter()
-    r.Use(wrapper.New())
-    r.Use(bind.New())
+    r.Use(chikit.Handler())
+    r.Use(chikit.Binder())
 
     r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
         var req CreateUserRequest
-        if !bind.JSON(r, &req) {
+        if !chikit.JSON(r, &req) {
             return  // Validation error already set in wrapper
         }
         // Use req.Email, req.Name, req.Age
-        wrapper.SetResponse(r, http.StatusCreated, user)
+        chikit.SetResponse(r, http.StatusCreated, user)
     })
 }
 ```
@@ -576,7 +573,7 @@ type ListUsersQuery struct {
 
 r.Get("/users", func(w http.ResponseWriter, r *http.Request) {
     var query ListUsersQuery
-    if !bind.Query(r, &query) {
+    if !chikit.Query(r, &query) {
         return  // Validation error already set in wrapper
     }
     // Use query.Page, query.Limit, query.Search
@@ -586,7 +583,7 @@ r.Get("/users", func(w http.ResponseWriter, r *http.Request) {
 ### Custom Validation Messages
 
 ```go
-r.Use(bind.New(bind.WithFormatter(func(field, tag, param string) string {
+r.Use(chikit.Binder(chikit.BinderWithFormatter(func(field, tag, param string) string {
     switch tag {
     case "required":
         return field + " is required"
@@ -606,7 +603,7 @@ Register custom validation tags at startup:
 
 ```go
 func init() {
-    bind.RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
+    chikit.RegisterValidation("customtag", func(fl validator.FieldLevel) bool {
         return fl.Field().String() == "valid"
     })
 }
@@ -619,24 +616,24 @@ func init() {
 Validate API keys with custom validators:
 
 ```go
-import "github.com/nhalm/chikit/auth"
+import "github.com/nhalm/chikit"
 
 // Simple validator
 validator := func(key string) bool {
     return key == "secret-key"
 }
 
-r.Use(auth.APIKey(validator))
+r.Use(chikit.APIKey(validator))
 
 // Custom header
-r.Use(auth.APIKey(validator, auth.WithAPIKeyHeader("X-Custom-Key")))
+r.Use(chikit.APIKey(validator, chikit.WithAPIKeyHeader("X-Custom-Key")))
 
 // Optional API key
-r.Use(auth.APIKey(validator, auth.WithOptionalAPIKey()))
+r.Use(chikit.APIKey(validator, chikit.WithOptionalAPIKey()))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
-    key, ok := auth.APIKeyFromContext(r.Context())
+    key, ok := chikit.APIKeyFromContext(r.Context())
     if ok {
         // Use API key
     }
@@ -654,14 +651,14 @@ validator := func(token string) bool {
     return validateJWT(token)
 }
 
-r.Use(auth.BearerToken(validator))
+r.Use(chikit.BearerToken(validator))
 
 // Optional bearer token
-r.Use(auth.BearerToken(validator, auth.WithOptionalBearerToken()))
+r.Use(chikit.BearerToken(validator, chikit.WithOptionalBearerToken()))
 
 // Retrieve in handler
 func handler(w http.ResponseWriter, r *http.Request) {
-    token, ok := auth.BearerTokenFromContext(r.Context())
+    token, ok := chikit.BearerTokenFromContext(r.Context())
     if ok {
         // Use bearer token
     }
@@ -670,24 +667,23 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 ## SLO Tracking
 
-Track service level objectives with per-route SLO classification. The SLO package sets tier and target in request context, and the wrapper middleware logs PASS/FAIL status via canonlog.
+Track service level objectives with per-route SLO classification. The SLO middleware sets tier and target in request context, and the wrapper middleware logs PASS/FAIL status via canonlog.
 
 ### Predefined Tiers
 
 | Tier | Target | Use Case |
 |------|--------|----------|
-| `Critical` | 50ms | Essential functions (99.99% availability) |
-| `HighFast` | 100ms | User-facing requests requiring quick responses |
-| `HighSlow` | 1000ms | Important requests tolerating higher latency |
-| `Low` | 5000ms | Background tasks, non-interactive functions |
+| `SLOCritical` | 50ms | Essential functions (99.99% availability) |
+| `SLOHighFast` | 100ms | User-facing requests requiring quick responses |
+| `SLOHighSlow` | 1000ms | Important requests tolerating higher latency |
+| `SLOLow` | 5000ms | Background tasks, non-interactive functions |
 
 ### Basic Usage
 
 ```go
 import (
     "github.com/nhalm/canonlog"
-    "github.com/nhalm/chikit/slo"
-    "github.com/nhalm/chikit/wrapper"
+    "github.com/nhalm/chikit"
 )
 
 func main() {
@@ -696,16 +692,16 @@ func main() {
     r := chi.NewRouter()
 
     // Enable canonlog and SLO logging
-    r.Use(wrapper.New(
-        wrapper.WithCanonlog(),
-        wrapper.WithSLOs(),
+    r.Use(chikit.Handler(
+        chikit.WithCanonlog(),
+        chikit.WithSLOs(),
     ))
 
     // Set SLO tier per route
-    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
-    r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
-    r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
-    r.With(slo.Track(slo.Low)).Post("/batch", batchProcess)
+    r.With(chikit.SLO(chikit.SLOCritical)).Get("/health", healthHandler)
+    r.With(chikit.SLO(chikit.SLOHighFast)).Get("/users/{id}", getUser)
+    r.With(chikit.SLO(chikit.SLOHighSlow)).Post("/reports", generateReport)
+    r.With(chikit.SLO(chikit.SLOLow)).Post("/batch", batchProcess)
 }
 ```
 
@@ -714,7 +710,7 @@ func main() {
 For routes that don't fit predefined tiers:
 
 ```go
-r.With(slo.TrackWithTarget(200 * time.Millisecond)).Get("/custom", handler)
+r.With(chikit.SLOWithTarget(200 * time.Millisecond)).Get("/custom", handler)
 ```
 
 Custom targets are logged with `slo_class: "custom"`.
@@ -747,7 +743,7 @@ HAVING failure_rate > 1.0
 
 ### Routes Without SLO
 
-Routes without `slo.Track()` middleware won't have SLO fields in logs:
+Routes without `chikit.SLO()` middleware won't have SLO fields in logs:
 
 ```json
 {"time":"...","level":"INFO","msg":"","method":"GET","path":"/misc","route":"/misc","status":200,"duration_ms":30}
@@ -767,14 +763,8 @@ import (
     "github.com/go-chi/chi/v5/middleware"
     "github.com/google/uuid"
     "github.com/nhalm/canonlog"
-    "github.com/nhalm/chikit/auth"
-    "github.com/nhalm/chikit/bind"
-    "github.com/nhalm/chikit/headers"
-    "github.com/nhalm/chikit/ratelimit"
-    "github.com/nhalm/chikit/ratelimit/store"
-    "github.com/nhalm/chikit/slo"
-    "github.com/nhalm/chikit/validate"
-    "github.com/nhalm/chikit/wrapper"
+    "github.com/nhalm/chikit"
+    "github.com/nhalm/chikit/store"
 )
 
 type ListUsersQuery struct {
@@ -798,33 +788,33 @@ func main() {
     r.Use(middleware.RealIP)
 
     // Wrapper with canonlog and SLO logging
-    r.Use(wrapper.New(
-        wrapper.WithCanonlog(),
-        wrapper.WithCanonlogFields(func(r *http.Request) map[string]any {
+    r.Use(chikit.Handler(
+        chikit.WithCanonlog(),
+        chikit.WithCanonlogFields(func(r *http.Request) map[string]any {
             return map[string]any{
                 "request_id": middleware.GetReqID(r.Context()),
             }
         }),
-        wrapper.WithSLOs(),
+        chikit.WithSLOs(),
     ))
 
     // Bind middleware for request binding/validation
-    r.Use(bind.New())
+    r.Use(chikit.Binder())
 
     // Limit request body size to 10MB
-    r.Use(validate.MaxBodySize(10 * 1024 * 1024))
+    r.Use(chikit.MaxBodySize(10 * 1024 * 1024))
 
     // Validate environment header
-    r.Use(validate.NewHeaders(
-        validate.WithHeader("X-Environment",
-            validate.WithAllowList("production", "staging", "development"),
+    r.Use(chikit.ValidateHeaders(
+        chikit.ValidateHeader("X-Environment",
+            chikit.ValidateAllowList("production", "staging", "development"),
         ),
     ))
 
     // Extract tenant ID from header
-    r.Use(headers.New("X-Tenant-ID", "tenant_id",
-        headers.WithRequired(),
-        headers.WithValidator(func(val string) (any, error) {
+    r.Use(chikit.ExtractHeader("X-Tenant-ID", "tenant_id",
+        chikit.ExtractRequired(),
+        chikit.ExtractWithValidator(func(val string) (any, error) {
             return uuid.Parse(val)
         }),
     ))
@@ -842,34 +832,34 @@ func main() {
     defer st.Close()
 
     // Global rate limit: 1000 requests per hour per IP
-    globalLimiter := ratelimit.New(st, 1000, 1*time.Hour,
-        ratelimit.WithName("global"),
-        ratelimit.WithIP(),
+    globalLimiter := chikit.NewRateLimiter(st, 1000, 1*time.Hour,
+        chikit.RateLimitWithName("global"),
+        chikit.RateLimitWithIP(),
     )
     r.Use(globalLimiter.Handler)
 
     // Health check with strict SLO
-    r.With(slo.Track(slo.Critical)).Get("/health", healthHandler)
+    r.With(chikit.SLO(chikit.SLOCritical)).Get("/health", healthHandler)
 
     // API routes
     r.Route("/api/v1", func(r chi.Router) {
         // API key authentication
-        r.Use(auth.APIKey(func(key string) bool {
+        r.Use(chikit.APIKey(func(key string) bool {
             return validateAPIKey(key)
         }))
 
         // Per-tenant rate limiting: 100 requests per minute
-        tenantLimiter := ratelimit.New(st, 100, 1*time.Minute,
-            ratelimit.WithName("tenant"),
-            ratelimit.WithIP(),
-            ratelimit.WithHeaderRequired("X-Tenant-ID"),
+        tenantLimiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
+            chikit.RateLimitWithName("tenant"),
+            chikit.RateLimitWithIP(),
+            chikit.RateLimitWithHeaderRequired("X-Tenant-ID"),
         )
         r.Use(tenantLimiter.Handler)
 
-        r.With(slo.Track(slo.HighFast)).Get("/users", listUsers)
-        r.With(slo.Track(slo.HighFast)).Get("/users/{id}", getUser)
-        r.With(slo.Track(slo.HighFast)).Post("/users", createUser)
-        r.With(slo.Track(slo.HighSlow)).Post("/reports", generateReport)
+        r.With(chikit.SLO(chikit.SLOHighFast)).Get("/users", listUsers)
+        r.With(chikit.SLO(chikit.SLOHighFast)).Get("/users/{id}", getUser)
+        r.With(chikit.SLO(chikit.SLOHighFast)).Post("/users", createUser)
+        r.With(chikit.SLO(chikit.SLOHighSlow)).Post("/reports", generateReport)
     })
 
     log.Fatal(http.ListenAndServe(":8080", r))
@@ -881,24 +871,24 @@ func validateAPIKey(key string) bool {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+    chikit.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func listUsers(w http.ResponseWriter, r *http.Request) {
-    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    val, ok := chikit.HeaderFromContext(r.Context(), "tenant_id")
     if !ok {
-        wrapper.SetError(r, wrapper.ErrBadRequest.With("No tenant ID"))
+        chikit.SetError(r, chikit.ErrBadRequest.With("No tenant ID"))
         return
     }
     tenantID := val.(uuid.UUID)
 
     var query ListUsersQuery
-    if !bind.Query(r, &query) {
+    if !chikit.Query(r, &query) {
         return
     }
 
     // Query users for tenant...
-    wrapper.SetResponse(r, http.StatusOK, map[string]any{
+    chikit.SetResponse(r, http.StatusOK, map[string]any{
         "tenant": tenantID.String(),
         "page":   query.Page,
         "limit":  query.Limit,
@@ -906,24 +896,24 @@ func listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUser(w http.ResponseWriter, r *http.Request) {
-    wrapper.SetResponse(r, http.StatusOK, map[string]string{"id": chi.URLParam(r, "id")})
+    chikit.SetResponse(r, http.StatusOK, map[string]string{"id": chi.URLParam(r, "id")})
 }
 
 func createUser(w http.ResponseWriter, r *http.Request) {
-    val, ok := headers.FromContext(r.Context(), "tenant_id")
+    val, ok := chikit.HeaderFromContext(r.Context(), "tenant_id")
     if !ok {
-        wrapper.SetError(r, wrapper.ErrBadRequest.With("No tenant ID"))
+        chikit.SetError(r, chikit.ErrBadRequest.With("No tenant ID"))
         return
     }
     tenantID := val.(uuid.UUID)
 
     var req CreateUserRequest
-    if !bind.JSON(r, &req) {
+    if !chikit.JSON(r, &req) {
         return // Returns 400 for validation errors, 413 if body exceeds MaxBodySize limit
     }
 
     // Create user for tenant...
-    wrapper.SetResponse(r, http.StatusCreated, map[string]any{
+    chikit.SetResponse(r, http.StatusCreated, map[string]any{
         "tenant": tenantID.String(),
         "email":  req.Email,
     })
@@ -931,7 +921,7 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 
 func generateReport(w http.ResponseWriter, r *http.Request) {
     // Long-running report generation...
-    wrapper.SetResponse(r, http.StatusOK, map[string]string{"status": "complete"})
+    chikit.SetResponse(r, http.StatusOK, map[string]string{"status": "complete"})
 }
 ```
 

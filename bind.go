@@ -1,29 +1,9 @@
-// Package bind provides request binding and validation for Chi middleware.
+package chikit
+
+// Request binding and validation for Chi middleware.
 //
-// The package offers JSON body and query parameter binding with struct tag validation
-// using go-playground/validator/v10. It follows chikit's middleware pattern with
-// context-based configuration.
-//
-// Basic usage:
-//
-//	r := chi.NewRouter()
-//	r.Use(wrapper.New())
-//	r.Use(bind.New())
-//
-//	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
-//	    var req CreateUserRequest
-//	    if !bind.JSON(r, &req) {
-//	        return
-//	    }
-//	    wrapper.SetResponse(r, http.StatusCreated, user)
-//	})
-//
-// With custom message formatter:
-//
-//	r.Use(bind.New(bind.WithFormatter(func(field, tag, param string) string {
-//	    return myTranslator.T("validation."+tag, field, param)
-//	})))
-package bind
+// Provides JSON body and query parameter binding with struct tag validation
+// using go-playground/validator/v10.
 
 import (
 	"context"
@@ -37,17 +17,16 @@ import (
 	"sync"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/nhalm/chikit/wrapper"
 )
 
-type contextKey string
+type bindContextKey string
 
-const configKey contextKey = "bind_config"
+const bindConfigKey bindContextKey = "bind_config"
 
 var (
-	validate      *validator.Validate
-	validateMu    sync.RWMutex
-	defaultConfig = &config{formatter: defaultFormatter}
+	validate          *validator.Validate
+	validateMu        sync.RWMutex
+	defaultBindConfig = &bindConfig{formatter: defaultFormatter}
 )
 
 func init() {
@@ -68,40 +47,40 @@ func init() {
 // Parameters: field name, validation tag, tag parameter (e.g., "10" from "min=10")
 type MessageFormatter func(field, tag, param string) string
 
-type config struct {
+type bindConfig struct {
 	formatter MessageFormatter
 }
 
-// Option configures the bind middleware.
-type Option func(*config)
+// BindOption configures the bind middleware.
+type BindOption func(*bindConfig)
 
 // WithFormatter sets a custom message formatter for validation errors.
-func WithFormatter(fn MessageFormatter) Option {
-	return func(c *config) {
+func WithFormatter(fn MessageFormatter) BindOption {
+	return func(c *bindConfig) {
 		c.formatter = fn
 	}
 }
 
-// New returns middleware with optional configuration.
-func New(opts ...Option) func(http.Handler) http.Handler {
-	cfg := &config{formatter: defaultFormatter}
+// Binder returns middleware with optional configuration.
+func Binder(opts ...BindOption) func(http.Handler) http.Handler {
+	cfg := &bindConfig{formatter: defaultFormatter}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), configKey, cfg)
+			ctx := context.WithValue(r.Context(), bindConfigKey, cfg)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func getConfig(ctx context.Context) *config {
-	if cfg, ok := ctx.Value(configKey).(*config); ok {
+func getBindConfig(ctx context.Context) *bindConfig {
+	if cfg, ok := ctx.Value(bindConfigKey).(*bindConfig); ok {
 		return cfg
 	}
-	return defaultConfig
+	return defaultBindConfig
 }
 
 func defaultFormatter(_, tag, param string) string {
@@ -139,12 +118,12 @@ func JSON(r *http.Request, dest any) bool {
 	ctx := r.Context()
 
 	if err := json.NewDecoder(r.Body).Decode(dest); err != nil {
-		if wrapper.HasState(ctx) {
+		if HasState(ctx) {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
-				wrapper.SetError(r, wrapper.ErrPayloadTooLarge.With("Request body too large"))
+				SetError(r, ErrPayloadTooLarge.With("Request body too large"))
 			} else {
-				wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid JSON request body"))
+				SetError(r, ErrBadRequest.With("Invalid JSON request body"))
 			}
 		}
 		return false
@@ -155,9 +134,9 @@ func JSON(r *http.Request, dest any) bool {
 	validateMu.RUnlock()
 
 	if err != nil {
-		if wrapper.HasState(ctx) {
-			cfg := getConfig(ctx)
-			wrapper.SetError(r, wrapper.NewValidationError(translateErrors(err, cfg.formatter)))
+		if HasState(ctx) {
+			cfg := getBindConfig(ctx)
+			SetError(r, NewValidationError(translateErrors(err, cfg.formatter)))
 		}
 		return false
 	}
@@ -172,8 +151,8 @@ func Query(r *http.Request, dest any) bool {
 	ctx := r.Context()
 
 	if err := decodeQuery(r, dest); err != nil {
-		if wrapper.HasState(ctx) {
-			wrapper.SetError(r, wrapper.ErrBadRequest.With("Invalid query parameters"))
+		if HasState(ctx) {
+			SetError(r, ErrBadRequest.With("Invalid query parameters"))
 		}
 		return false
 	}
@@ -183,9 +162,9 @@ func Query(r *http.Request, dest any) bool {
 	validateMu.RUnlock()
 
 	if err != nil {
-		if wrapper.HasState(ctx) {
-			cfg := getConfig(ctx)
-			wrapper.SetError(r, wrapper.NewValidationError(translateErrors(err, cfg.formatter)))
+		if HasState(ctx) {
+			cfg := getBindConfig(ctx)
+			SetError(r, NewValidationError(translateErrors(err, cfg.formatter)))
 		}
 		return false
 	}
@@ -201,18 +180,18 @@ func RegisterValidation(tag string, fn validator.Func) error {
 	return validate.RegisterValidation(tag, fn)
 }
 
-func translateErrors(err error, formatter MessageFormatter) []wrapper.FieldError {
+func translateErrors(err error, formatter MessageFormatter) []FieldError {
 	errs, ok := err.(validator.ValidationErrors)
 	if !ok {
-		return []wrapper.FieldError{{
+		return []FieldError{{
 			Param:   "",
 			Code:    "validation",
 			Message: err.Error(),
 		}}
 	}
-	result := make([]wrapper.FieldError, len(errs))
+	result := make([]FieldError, len(errs))
 	for i, e := range errs {
-		result[i] = wrapper.FieldError{
+		result[i] = FieldError{
 			Param:   e.Field(),
 			Code:    e.Tag(),
 			Message: formatter(e.Field(), e.Tag(), e.Param()),

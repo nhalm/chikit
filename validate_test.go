@@ -1,4 +1,4 @@
-package validate_test
+package chikit
 
 import (
 	"bytes"
@@ -8,9 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/nhalm/chikit/validate"
-	"github.com/nhalm/chikit/wrapper"
 )
 
 func TestMaxBodySize_WithinLimit(t *testing.T) {
@@ -23,7 +20,7 @@ func TestMaxBodySize_WithinLimit(t *testing.T) {
 	req := httptest.NewRequest("POST", "/", body)
 	rec := httptest.NewRecorder()
 
-	middleware := validate.MaxBodySize(1024)
+	middleware := MaxBodySize(1024)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -46,7 +43,7 @@ func TestMaxBodySize_ExceedsLimit(t *testing.T) {
 	req.ContentLength = 2000
 	rec := httptest.NewRecorder()
 
-	middleware := validate.MaxBodySize(1024)
+	middleware := MaxBodySize(1024)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -69,7 +66,7 @@ func TestMaxBodySize_ExceedsLimit_WithWrapper(t *testing.T) {
 	req.ContentLength = 2000
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(validate.MaxBodySize(1024)(handler))
+	chain := Handler()(MaxBodySize(1024)(handler))
 	chain.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -79,7 +76,7 @@ func TestMaxBodySize_ExceedsLimit_WithWrapper(t *testing.T) {
 		t.Error("handler should not be called when Content-Length exceeds limit")
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -102,7 +99,7 @@ func TestMaxBodySize_ChunkedTransfer_ExceedsLimit(t *testing.T) {
 	req := httptest.NewRequest("POST", "/", body)
 	rec := httptest.NewRecorder()
 
-	middleware := validate.MaxBodySize(1024)
+	middleware := MaxBodySize(1024)
 	middleware(handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -119,8 +116,8 @@ func TestHeaders_Required(t *testing.T) {
 	req.Header.Set("X-API-Key", "secret")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-API-Key", validate.WithRequired()),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-API-Key", ValidateRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -137,8 +134,8 @@ func TestHeaders_MissingRequired(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-API-Key", validate.WithRequired()),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-API-Key", ValidateRequired()),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -159,8 +156,8 @@ func TestHeaders_AllowList(t *testing.T) {
 	req.Header.Set("X-Environment", "production")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-Environment", ValidateAllowList("production", "staging")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -178,8 +175,8 @@ func TestHeaders_AllowListFails(t *testing.T) {
 	req.Header.Set("X-Environment", "development")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-Environment", ValidateAllowList("production", "staging")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -200,8 +197,8 @@ func TestHeaders_DenyList(t *testing.T) {
 	req.Header.Set("X-Source", "api")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-Source", validate.WithDenyList("blocked", "banned")),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-Source", ValidateDenyList("blocked", "banned")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -219,8 +216,8 @@ func TestHeaders_DenyListFails(t *testing.T) {
 	req.Header.Set("X-Source", "blocked")
 	rec := httptest.NewRecorder()
 
-	middleware := validate.NewHeaders(
-		validate.WithHeader("X-Source", validate.WithDenyList("blocked", "banned")),
+	middleware := ValidateHeaders(
+		ValidateWithHeader("X-Source", ValidateDenyList("blocked", "banned")),
 	)
 	middleware(handler).ServeHTTP(rec, req)
 
@@ -251,7 +248,7 @@ func TestHeaders_CaseSensitive_AllowList(t *testing.T) {
 			allowList:      []string{"application/json"},
 			caseSensitive:  false,
 			expectedStatus: http.StatusOK,
-			description:    "without WithCaseSensitive, different cases should match",
+			description:    "without ValidateCaseSensitive, different cases should match",
 		},
 		{
 			name:           "case_sensitive_rejects_different_case",
@@ -259,7 +256,7 @@ func TestHeaders_CaseSensitive_AllowList(t *testing.T) {
 			allowList:      []string{"application/json"},
 			caseSensitive:  true,
 			expectedStatus: http.StatusBadRequest,
-			description:    "with WithCaseSensitive, different cases should not match",
+			description:    "with ValidateCaseSensitive, different cases should not match",
 		},
 		{
 			name:           "case_sensitive_accepts_exact_match",
@@ -267,7 +264,7 @@ func TestHeaders_CaseSensitive_AllowList(t *testing.T) {
 			allowList:      []string{"application/json"},
 			caseSensitive:  true,
 			expectedStatus: http.StatusOK,
-			description:    "with WithCaseSensitive, exact case should match",
+			description:    "with ValidateCaseSensitive, exact case should match",
 		},
 		{
 			name:           "case_insensitive_all_lowercase",
@@ -285,14 +282,14 @@ func TestHeaders_CaseSensitive_AllowList(t *testing.T) {
 			req.Header.Set("Content-Type", tt.headerValue)
 			rec := httptest.NewRecorder()
 
-			var opts []validate.HeaderOption
-			opts = append(opts, validate.WithAllowList(tt.allowList...))
+			var opts []ValidateHeaderOption
+			opts = append(opts, ValidateAllowList(tt.allowList...))
 			if tt.caseSensitive {
-				opts = append(opts, validate.WithCaseSensitive())
+				opts = append(opts, ValidateCaseSensitive())
 			}
 
-			middleware := validate.NewHeaders(
-				validate.WithHeader("Content-Type", opts...),
+			middleware := ValidateHeaders(
+				ValidateWithHeader("Content-Type", opts...),
 			)
 			middleware(handler).ServeHTTP(rec, req)
 
@@ -322,7 +319,7 @@ func TestHeaders_CaseSensitive_DenyList(t *testing.T) {
 			denyList:       []string{"blocked"},
 			caseSensitive:  false,
 			expectedStatus: http.StatusBadRequest,
-			description:    "without WithCaseSensitive, different cases should be blocked",
+			description:    "without ValidateCaseSensitive, different cases should be blocked",
 		},
 		{
 			name:           "case_sensitive_allows_different_case",
@@ -330,7 +327,7 @@ func TestHeaders_CaseSensitive_DenyList(t *testing.T) {
 			denyList:       []string{"blocked"},
 			caseSensitive:  true,
 			expectedStatus: http.StatusOK,
-			description:    "with WithCaseSensitive, different cases should not match deny list",
+			description:    "with ValidateCaseSensitive, different cases should not match deny list",
 		},
 		{
 			name:           "case_sensitive_blocks_exact_match",
@@ -338,7 +335,7 @@ func TestHeaders_CaseSensitive_DenyList(t *testing.T) {
 			denyList:       []string{"blocked"},
 			caseSensitive:  true,
 			expectedStatus: http.StatusBadRequest,
-			description:    "with WithCaseSensitive, exact case should be blocked",
+			description:    "with ValidateCaseSensitive, exact case should be blocked",
 		},
 		{
 			name:           "case_insensitive_any_case_blocked",
@@ -356,14 +353,14 @@ func TestHeaders_CaseSensitive_DenyList(t *testing.T) {
 			req.Header.Set("X-Source", tt.headerValue)
 			rec := httptest.NewRecorder()
 
-			var opts []validate.HeaderOption
-			opts = append(opts, validate.WithDenyList(tt.denyList...))
+			var opts []ValidateHeaderOption
+			opts = append(opts, ValidateDenyList(tt.denyList...))
 			if tt.caseSensitive {
-				opts = append(opts, validate.WithCaseSensitive())
+				opts = append(opts, ValidateCaseSensitive())
 			}
 
-			middleware := validate.NewHeaders(
-				validate.WithHeader("X-Source", opts...),
+			middleware := ValidateHeaders(
+				ValidateWithHeader("X-Source", opts...),
 			)
 			middleware(handler).ServeHTTP(rec, req)
 
@@ -382,8 +379,8 @@ func TestHeaders_WithWrapper_MissingRequired(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", http.NoBody)
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(validate.NewHeaders(
-		validate.WithHeader("X-API-Key", validate.WithRequired()),
+	chain := Handler()(ValidateHeaders(
+		ValidateWithHeader("X-API-Key", ValidateRequired()),
 	)(handler))
 	chain.ServeHTTP(rec, req)
 
@@ -391,7 +388,7 @@ func TestHeaders_WithWrapper_MissingRequired(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -416,8 +413,8 @@ func TestHeaders_WithWrapper_NotInAllowList(t *testing.T) {
 	req.Header.Set("X-Environment", "development")
 	rec := httptest.NewRecorder()
 
-	chain := wrapper.New()(validate.NewHeaders(
-		validate.WithHeader("X-Environment", validate.WithAllowList("production", "staging")),
+	chain := Handler()(ValidateHeaders(
+		ValidateWithHeader("X-Environment", ValidateAllowList("production", "staging")),
 	)(handler))
 	chain.ServeHTTP(rec, req)
 
@@ -425,7 +422,7 @@ func TestHeaders_WithWrapper_NotInAllowList(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 
-	var resp map[string]wrapper.Error
+	var resp map[string]APIError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}

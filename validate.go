@@ -1,35 +1,30 @@
-// Package validate provides middleware for request validation.
-//
-// The package offers validation for headers and request body size.
-// All validation middleware returns structured errors via wrapper if available,
-// or standard HTTP errors otherwise.
+// Validation middleware for request headers and body size.
 //
 // Header validation:
 //
-//	r.Use(validate.NewHeaders(
-//		validate.WithHeader("Content-Type", validate.WithRequired(), validate.WithAllowList("application/json")),
+//	r.Use(chikit.ValidateHeaders(
+//		chikit.ValidateWithHeader("Content-Type", chikit.ValidateRequired(), chikit.ValidateAllowList("application/json")),
 //	))
 //
 // Body size limiting:
 //
-//	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
-package validate
+//	r.Use(chikit.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
+
+package chikit
 
 import (
 	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/nhalm/chikit/wrapper"
 )
 
-// bodySizeConfig holds configuration for MaxBodySize middleware.
-type bodySizeConfig struct {
+// validateBodySizeConfig holds configuration for MaxBodySize middleware.
+type validateBodySizeConfig struct {
 	maxBytes int64
 }
 
 // BodySizeOption configures MaxBodySize middleware.
-type BodySizeOption func(*bodySizeConfig)
+type BodySizeOption func(*validateBodySizeConfig)
 
 // MaxBodySize returns middleware that limits request body size.
 //
@@ -41,7 +36,7 @@ type BodySizeOption func(*bodySizeConfig)
 //
 // When used with bind.JSON, the second stage is automatic:
 //
-//	r.Use(validate.MaxBodySize(1024 * 1024))
+//	r.Use(chikit.MaxBodySize(1024 * 1024))
 //	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
 //	    var req CreateUserRequest
 //	    if !bind.JSON(r, &req) {
@@ -53,9 +48,9 @@ type BodySizeOption func(*bodySizeConfig)
 //
 // Basic usage:
 //
-//	r.Use(validate.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
+//	r.Use(chikit.MaxBodySize(10 * 1024 * 1024)) // 10MB limit
 func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http.Handler {
-	cfg := &bodySizeConfig{
+	cfg := &validateBodySizeConfig{
 		maxBytes: maxBytes,
 	}
 	for _, opt := range opts {
@@ -65,8 +60,8 @@ func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > cfg.maxBytes {
-				if wrapper.HasState(r.Context()) {
-					wrapper.SetError(r, wrapper.ErrPayloadTooLarge.With("Request body too large"))
+				if HasState(r.Context()) {
+					SetError(r, ErrPayloadTooLarge.With("Request body too large"))
 				} else {
 					http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
 				}
@@ -79,36 +74,27 @@ func MaxBodySize(maxBytes int64, opts ...BodySizeOption) func(http.Handler) http
 	}
 }
 
-// HeaderConfig defines validation rules for a header.
-type HeaderConfig struct {
-	// Name is the HTTP header name to validate
-	Name string
-
-	// Required indicates whether the header must be present
-	Required bool
-
-	// AllowedList is a list of allowed values (empty means any value is allowed)
-	AllowedList []string
-
-	// DeniedList is a list of denied values
-	DeniedList []string
-
-	// CaseSensitive determines whether value comparisons are case-sensitive (default: false)
+// ValidateHeaderConfig defines validation rules for a header.
+type ValidateHeaderConfig struct {
+	Name          string
+	Required      bool
+	AllowedList   []string
+	DeniedList    []string
 	CaseSensitive bool
 }
 
-// headersConfig holds the configuration for NewHeaders middleware.
-type headersConfig struct {
-	rules []HeaderConfig
+// validateHeadersConfig holds the configuration for ValidateHeaders middleware.
+type validateHeadersConfig struct {
+	rules []ValidateHeaderConfig
 }
 
-// HeadersOption configures NewHeaders middleware.
-type HeadersOption func(*headersConfig)
+// ValidateHeadersOption configures ValidateHeaders middleware.
+type ValidateHeadersOption func(*validateHeadersConfig)
 
-// WithHeader adds a header validation rule with the given name and options.
-func WithHeader(name string, opts ...HeaderOption) HeadersOption {
-	return func(cfg *headersConfig) {
-		rule := HeaderConfig{Name: name}
+// ValidateWithHeader adds a header validation rule with the given name and options.
+func ValidateWithHeader(name string, opts ...ValidateHeaderOption) ValidateHeadersOption {
+	return func(cfg *validateHeadersConfig) {
+		rule := ValidateHeaderConfig{Name: name}
 		for _, opt := range opts {
 			opt(&rule)
 		}
@@ -116,34 +102,34 @@ func WithHeader(name string, opts ...HeaderOption) HeadersOption {
 	}
 }
 
-// NewHeaders returns middleware that validates request headers according to the given rules.
+// ValidateHeaders returns middleware that validates request headers according to the given rules.
 // For each rule, checks if the header is present (when required), validates against
 // allow/deny lists, and enforces case sensitivity settings. Returns 400 (Bad Request)
 // for all validation failures.
 //
 // Example:
 //
-//	r.Use(validate.NewHeaders(
-//		validate.WithHeader("Content-Type",
-//			validate.WithRequired(),
-//			validate.WithAllowList("application/json", "application/xml")),
-//		validate.WithHeader("X-Custom-Header",
-//			validate.WithDenyList("forbidden-value")),
+//	r.Use(chikit.ValidateHeaders(
+//		chikit.ValidateWithHeader("Content-Type",
+//			chikit.ValidateRequired(),
+//			chikit.ValidateAllowList("application/json", "application/xml")),
+//		chikit.ValidateWithHeader("X-Custom-Header",
+//			chikit.ValidateDenyList("forbidden-value")),
 //	))
-func NewHeaders(opts ...HeadersOption) func(http.Handler) http.Handler {
-	cfg := &headersConfig{}
+func ValidateHeaders(opts ...ValidateHeadersOption) func(http.Handler) http.Handler {
+	cfg := &validateHeadersConfig{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			useWrapper := wrapper.HasState(r.Context())
+			useWrapper := HasState(r.Context())
 
 			for i := range cfg.rules {
-				if err := validateHeader(r, &cfg.rules[i]); err != nil {
+				if err := validateHeaderRule(r, &cfg.rules[i]); err != nil {
 					if useWrapper {
-						wrapper.SetError(r, err)
+						SetError(r, err)
 					} else {
 						http.Error(w, err.Message, err.Status)
 					}
@@ -156,12 +142,12 @@ func NewHeaders(opts ...HeadersOption) func(http.Handler) http.Handler {
 	}
 }
 
-func validateHeader(r *http.Request, rule *HeaderConfig) *wrapper.Error {
+func validateHeaderRule(r *http.Request, rule *ValidateHeaderConfig) *APIError {
 	value := r.Header.Get(rule.Name)
 
 	if value == "" {
 		if rule.Required {
-			return &wrapper.Error{
+			return &APIError{
 				Type:    "validation_error",
 				Code:    "missing_header",
 				Message: fmt.Sprintf("Missing required header: %s", rule.Name),
@@ -177,14 +163,14 @@ func validateHeader(r *http.Request, rule *HeaderConfig) *wrapper.Error {
 		checkValue = strings.ToLower(value)
 	}
 
-	if err := checkAllowList(rule, checkValue); err != nil {
+	if err := validateCheckAllowList(rule, checkValue); err != nil {
 		return err
 	}
 
-	return checkDenyList(rule, checkValue)
+	return validateCheckDenyList(rule, checkValue)
 }
 
-func checkAllowList(rule *HeaderConfig, checkValue string) *wrapper.Error {
+func validateCheckAllowList(rule *ValidateHeaderConfig, checkValue string) *APIError {
 	if len(rule.AllowedList) == 0 {
 		return nil
 	}
@@ -199,7 +185,7 @@ func checkAllowList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 		}
 	}
 
-	return &wrapper.Error{
+	return &APIError{
 		Type:    "validation_error",
 		Code:    "invalid_header",
 		Message: fmt.Sprintf("Header %s value not in allowed list", rule.Name),
@@ -208,7 +194,7 @@ func checkAllowList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 	}
 }
 
-func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
+func validateCheckDenyList(rule *ValidateHeaderConfig, checkValue string) *APIError {
 	if len(rule.DeniedList) == 0 {
 		return nil
 	}
@@ -219,7 +205,7 @@ func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 			compareVal = strings.ToLower(d)
 		}
 		if checkValue == compareVal {
-			return &wrapper.Error{
+			return &APIError{
 				Type:    "validation_error",
 				Code:    "invalid_header",
 				Message: fmt.Sprintf("Header %s value is denied", rule.Name),
@@ -232,36 +218,36 @@ func checkDenyList(rule *HeaderConfig, checkValue string) *wrapper.Error {
 	return nil
 }
 
-// HeaderOption configures a header validation rule.
-type HeaderOption func(*HeaderConfig)
+// ValidateHeaderOption configures a header validation rule.
+type ValidateHeaderOption func(*ValidateHeaderConfig)
 
-// WithRequired marks a header as required.
-func WithRequired() HeaderOption {
-	return func(r *HeaderConfig) {
+// ValidateRequired marks a header as required.
+func ValidateRequired() ValidateHeaderOption {
+	return func(r *ValidateHeaderConfig) {
 		r.Required = true
 	}
 }
 
-// WithAllowList sets the list of allowed values for a header.
+// ValidateAllowList sets the list of allowed values for a header.
 // If set, only values in this list are permitted. Returns 400 if the value is not in the list.
-func WithAllowList(values ...string) HeaderOption {
-	return func(r *HeaderConfig) {
+func ValidateAllowList(values ...string) ValidateHeaderOption {
+	return func(r *ValidateHeaderConfig) {
 		r.AllowedList = values
 	}
 }
 
-// WithDenyList sets the list of denied values for a header.
+// ValidateDenyList sets the list of denied values for a header.
 // If set, values in this list are explicitly forbidden. Returns 400 if the value is in the list.
-func WithDenyList(values ...string) HeaderOption {
-	return func(r *HeaderConfig) {
+func ValidateDenyList(values ...string) ValidateHeaderOption {
+	return func(r *ValidateHeaderConfig) {
 		r.DeniedList = values
 	}
 }
 
-// WithCaseSensitive makes header value comparisons case-sensitive.
+// ValidateCaseSensitive makes header value comparisons case-sensitive.
 // By default, comparisons are case-insensitive.
-func WithCaseSensitive() HeaderOption {
-	return func(r *HeaderConfig) {
+func ValidateCaseSensitive() ValidateHeaderOption {
+	return func(r *ValidateHeaderConfig) {
 		r.CaseSensitive = true
 	}
 }

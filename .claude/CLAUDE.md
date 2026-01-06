@@ -8,30 +8,34 @@
 
 ```
 chikit/
-├── wrapper/             # Context-based response handling, Stripe-style errors
-├── ratelimit/           # Rate limiting with Redis/memory backends
-│   └── store/           # Storage interface + implementations
-├── headers/             # Header extraction with context injection
-├── validate/            # Body size, query params, header validation
-├── auth/                # API key and bearer token authentication
-└── slo/                 # SLO tracking with callbacks
+├── api_error.go    # APIError type, FieldError, sentinels
+├── state.go        # State, HasState
+├── response.go     # SetError, SetResponse, SetHeader
+├── handler.go      # Handler middleware + options
+├── bind.go         # JSON, Query, RegisterValidation
+├── ratelimit.go    # NewRateLimiter + options
+├── auth.go         # APIKey, BearerToken + options
+├── headers.go      # ExtractHeader + options
+├── validate.go     # ValidateHeaders, MaxBodySize + options
+├── slo.go          # SLO tracking
+└── store/          # Rate limit backends
 ```
 
 ## Core Patterns
 
-### Wrapper Package (Central to Architecture)
+### Handler Middleware (Central to Architecture)
 
-The `wrapper` package is the foundation. `wrapper.Handler()` must be the outermost middleware. Key concepts:
+`chikit.Handler()` must be the outermost middleware. Key concepts:
 
-1. **State in Context**: `wrapper.Handler` stores a mutable `*State` in context at request start
-2. **Middleware never writes responses**: All middleware uses `wrapper.SetError()` instead of `http.Error()`
-3. **Single response point**: `wrapper.Handler` writes all JSON responses in its deferred cleanup
-4. **Dual-mode support**: Middleware checks `wrapper.HasState(ctx)` to support standalone use
+1. **State in Context**: `chikit.Handler` stores a mutable `*State` in context at request start
+2. **Middleware never writes responses**: All middleware uses `chikit.SetError()` instead of `http.Error()`
+3. **Single response point**: `chikit.Handler` writes all JSON responses in its deferred cleanup
+4. **Dual-mode support**: Middleware checks `chikit.HasState(ctx)` to support standalone use
 
 ```go
-// Middleware pattern - always check for wrapper state
-if wrapper.HasState(r.Context()) {
-    wrapper.SetError(r, wrapper.ErrUnauthorized.With("Invalid API key"))
+// Middleware pattern - always check for state
+if chikit.HasState(r.Context()) {
+    chikit.SetError(r, chikit.ErrUnauthorized.With("Invalid API key"))
 } else {
     http.Error(w, "Invalid API key", http.StatusUnauthorized)
 }
@@ -41,31 +45,31 @@ return // Always return after setting error
 ### Sentinel Errors
 
 Predefined errors with `.With()` for custom messages:
-- `wrapper.ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`
-- `wrapper.ErrConflict`, `ErrUnprocessableEntity`, `ErrRateLimited`, `ErrInternal`
+- `chikit.ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`
+- `chikit.ErrConflict`, `ErrUnprocessableEntity`, `ErrRateLimited`, `ErrInternal`
 
 ```go
-wrapper.SetError(r, wrapper.ErrNotFound.With("User not found"))
-wrapper.SetError(r, wrapper.ErrBadRequest.WithParam("Invalid format", "email"))
+chikit.SetError(r, chikit.ErrNotFound.With("User not found"))
+chikit.SetError(r, chikit.ErrBadRequest.WithParam("Invalid format", "email"))
 ```
 
 ### Rate Limiting
 
 ```go
 // Single dimension
-limiter := ratelimit.New(st, 100, time.Minute, ratelimit.WithIP())
+limiter := chikit.NewRateLimiter(st, 100, time.Minute, chikit.RateLimitWithIP())
 r.Use(limiter.Handler)
 
 // Multi-dimensional with required/optional
-limiter := ratelimit.New(st, 100, time.Minute,
-    ratelimit.WithIP(),
-    ratelimit.WithHeaderRequired("X-Tenant-ID"),  // 400 if missing
-    ratelimit.WithQueryParam("user_id"),          // skip if missing
+limiter := chikit.NewRateLimiter(st, 100, time.Minute,
+    chikit.RateLimitWithIP(),
+    chikit.RateLimitWithHeaderRequired("X-Tenant-ID"),  // 400 if missing
+    chikit.RateLimitWithQueryParam("user_id"),          // skip if missing
 )
 r.Use(limiter.Handler)
 ```
 
-Use `WithName()` for layered rate limiting to avoid key collisions.
+Use `RateLimitWithName()` for layered rate limiting to avoid key collisions.
 
 ### Storage Backends
 

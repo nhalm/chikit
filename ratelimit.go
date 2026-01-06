@@ -1,6 +1,6 @@
-// Package ratelimit provides flexible rate limiting middleware for Chi and standard http.Handler.
+// Rate limiting middleware for Chi and standard http.Handler.
 //
-// The package uses a functional options pattern for configuring rate limiters. Key dimensions
+// Uses a functional options pattern for configuring rate limiters. Key dimensions
 // (IP, header, endpoint, etc.) are added via options, allowing single or multi-dimensional
 // rate limiting. All middleware sets standard rate limit headers (RateLimit-Limit,
 // RateLimit-Remaining, RateLimit-Reset) and returns 429 (Too Many Requests) when limits
@@ -10,24 +10,25 @@
 //
 //	store := store.NewMemory()
 //	defer store.Close()
-//	r.Use(ratelimit.New(store, 100, 1*time.Minute, ratelimit.WithIP()).Handler)
+//	r.Use(chikit.RateLimiter(store, 100, 1*time.Minute, chikit.RateLimitWithIP()).Handler)
 //
 // Multi-dimensional example:
 //
-//	limiter := ratelimit.New(store, 100, 1*time.Minute,
-//	    ratelimit.WithName("api"),
-//	    ratelimit.WithIP(),
-//	    ratelimit.WithHeader("X-Tenant-ID"),
+//	limiter := chikit.RateLimiter(store, 100, 1*time.Minute,
+//	    chikit.RateLimitWithName("api"),
+//	    chikit.RateLimitWithIP(),
+//	    chikit.RateLimitWithHeader("X-Tenant-ID"),
 //	)
 //	r.Use(limiter.Handler)
 //
-// Key dimension options have optional *Required variants (e.g., WithHeaderRequired).
+// Key dimension options have optional *Required variants (e.g., RateLimitWithHeaderRequired).
 // When a required dimension is missing, the request is rejected with 400 Bad Request.
 // When a non-required dimension is missing, rate limiting is skipped for that request.
 //
 // For distributed deployments (Kubernetes), use the Redis store. The in-memory store
 // is only suitable for single-instance deployments and development.
-package ratelimit
+
+package chikit
 
 import (
 	"fmt"
@@ -37,72 +38,71 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nhalm/chikit/ratelimit/store"
-	"github.com/nhalm/chikit/wrapper"
+	"github.com/nhalm/chikit/store"
 )
 
-// HeaderMode controls when rate limit headers are included in responses.
-type HeaderMode int
+// RateLimitHeaderMode controls when rate limit headers are included in responses.
+type RateLimitHeaderMode int
 
 const (
-	// HeadersAlways includes rate limit headers on all responses (default).
+	// RateLimitHeadersAlways includes rate limit headers on all responses (default).
 	// Headers: RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset
 	// On 429: Also includes Retry-After
-	HeadersAlways HeaderMode = iota
+	RateLimitHeadersAlways RateLimitHeaderMode = iota
 
-	// HeadersOnLimitExceeded includes rate limit headers only on 429 responses.
+	// RateLimitHeadersOnLimitExceeded includes rate limit headers only on 429 responses.
 	// Headers on 429: RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After
-	HeadersOnLimitExceeded
+	RateLimitHeadersOnLimitExceeded
 
-	// HeadersNever never includes rate limit headers in any response.
+	// RateLimitHeadersNever never includes rate limit headers in any response.
 	// Use this when you want rate limiting without exposing limits to clients.
-	HeadersNever
+	RateLimitHeadersNever
 )
 
-// keyFunc extracts a rate limiting key component from an HTTP request.
+// rateLimitKeyFunc extracts a rate limiting key component from an HTTP request.
 // Returning an empty string indicates the value is missing.
-type keyFunc func(*http.Request) string
+type rateLimitKeyFunc func(*http.Request) string
 
-// keyDimension holds a key function with validation metadata.
-type keyDimension struct {
-	fn       keyFunc
+// rateLimitDimension holds a key function with validation metadata.
+type rateLimitDimension struct {
+	fn       rateLimitKeyFunc
 	required bool
 	name     string // for error messages (e.g., "header X-API-Key")
 }
 
-// Limiter implements rate limiting middleware.
-type Limiter struct {
+// RateLimiter implements rate limiting middleware.
+type RateLimiter struct {
 	store      store.Store
 	limit      int64
 	window     time.Duration
 	name       string
-	keyDims    []keyDimension
-	headerMode HeaderMode
+	keyDims    []rateLimitDimension
+	headerMode RateLimitHeaderMode
 }
 
-// Option configures a Limiter.
-type Option func(*Limiter)
+// RateLimitOption configures a RateLimiter.
+type RateLimitOption func(*RateLimiter)
 
-// WithHeaderMode configures when rate limit headers are included in responses.
-func WithHeaderMode(mode HeaderMode) Option {
-	return func(l *Limiter) {
+// RateLimitWithHeaderMode configures when rate limit headers are included in responses.
+func RateLimitWithHeaderMode(mode RateLimitHeaderMode) RateLimitOption {
+	return func(l *RateLimiter) {
 		l.headerMode = mode
 	}
 }
 
-// WithName sets a prefix for rate limit keys.
+// RateLimitWithName sets a prefix for rate limit keys.
 // Use to prevent key collisions when layering multiple rate limiters.
-func WithName(name string) Option {
-	return func(l *Limiter) {
+func RateLimitWithName(name string) RateLimitOption {
+	return func(l *RateLimiter) {
 		l.name = name
 	}
 }
 
-// WithIP adds the client IP address (from RemoteAddr) to the rate limiting key.
+// RateLimitWithIP adds the client IP address (from RemoteAddr) to the rate limiting key.
 // Use this for direct connections without a proxy. RemoteAddr is always present.
-func WithIP() Option {
-	return func(l *Limiter) {
-		l.keyDims = append(l.keyDims, keyDimension{
+func RateLimitWithIP() RateLimitOption {
+	return func(l *RateLimiter) {
+		l.keyDims = append(l.keyDims, rateLimitDimension{
 			fn: func(r *http.Request) string {
 				ip, _, err := net.SplitHostPort(r.RemoteAddr)
 				if err != nil {
@@ -116,29 +116,29 @@ func WithIP() Option {
 	}
 }
 
-// WithRealIP adds the client IP from X-Forwarded-For or X-Real-IP headers.
+// RateLimitWithRealIP adds the client IP from X-Forwarded-For or X-Real-IP headers.
 // Use this when behind a proxy/load balancer.
 // If neither header is present, rate limiting is skipped for that request.
 //
 // SECURITY: Only use this behind a trusted reverse proxy that sets these headers.
 // Without a proxy, clients can spoof X-Forwarded-For to bypass rate limits.
-func WithRealIP() Option {
-	return withRealIP(false)
+func RateLimitWithRealIP() RateLimitOption {
+	return rateLimitWithRealIP(false)
 }
 
-// WithRealIPRequired adds the client IP from X-Forwarded-For or X-Real-IP headers.
+// RateLimitWithRealIPRequired adds the client IP from X-Forwarded-For or X-Real-IP headers.
 // Use this when behind a proxy/load balancer.
 // Returns 400 Bad Request when neither header is present.
 //
 // SECURITY: Only use this behind a trusted reverse proxy that sets these headers.
 // Without a proxy, clients can spoof X-Forwarded-For to bypass rate limits.
-func WithRealIPRequired() Option {
-	return withRealIP(true)
+func RateLimitWithRealIPRequired() RateLimitOption {
+	return rateLimitWithRealIP(true)
 }
 
-func withRealIP(required bool) Option {
-	return func(l *Limiter) {
-		l.keyDims = append(l.keyDims, keyDimension{
+func rateLimitWithRealIP(required bool) RateLimitOption {
+	return func(l *RateLimiter) {
+		l.keyDims = append(l.keyDims, rateLimitDimension{
 			fn: func(r *http.Request) string {
 				if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 					if idx := strings.Index(xff, ","); idx != -1 {
@@ -157,11 +157,11 @@ func withRealIP(required bool) Option {
 	}
 }
 
-// WithEndpoint adds the HTTP method and path to the rate limiting key.
+// RateLimitWithEndpoint adds the HTTP method and path to the rate limiting key.
 // Key component format: "<method>:<path>". Method and path are always present.
-func WithEndpoint() Option {
-	return func(l *Limiter) {
-		l.keyDims = append(l.keyDims, keyDimension{
+func RateLimitWithEndpoint() RateLimitOption {
+	return func(l *RateLimiter) {
+		l.keyDims = append(l.keyDims, rateLimitDimension{
 			fn: func(r *http.Request) string {
 				var sb strings.Builder
 				sb.Grow(len(r.Method) + 1 + len(r.URL.Path))
@@ -176,21 +176,21 @@ func WithEndpoint() Option {
 	}
 }
 
-// WithHeader adds a header value to the rate limiting key.
+// RateLimitWithHeader adds a header value to the rate limiting key.
 // If the header is missing, rate limiting is skipped for that request.
-func WithHeader(header string) Option {
-	return withHeader(header, false)
+func RateLimitWithHeader(header string) RateLimitOption {
+	return rateLimitWithHeader(header, false)
 }
 
-// WithHeaderRequired adds a header value to the rate limiting key.
+// RateLimitWithHeaderRequired adds a header value to the rate limiting key.
 // Returns 400 Bad Request when the header is missing.
-func WithHeaderRequired(header string) Option {
-	return withHeader(header, true)
+func RateLimitWithHeaderRequired(header string) RateLimitOption {
+	return rateLimitWithHeader(header, true)
 }
 
-func withHeader(header string, required bool) Option {
-	return func(l *Limiter) {
-		l.keyDims = append(l.keyDims, keyDimension{
+func rateLimitWithHeader(header string, required bool) RateLimitOption {
+	return func(l *RateLimiter) {
+		l.keyDims = append(l.keyDims, rateLimitDimension{
 			fn: func(r *http.Request) string {
 				return r.Header.Get(header)
 			},
@@ -200,21 +200,21 @@ func withHeader(header string, required bool) Option {
 	}
 }
 
-// WithQueryParam adds a query parameter value to the rate limiting key.
+// RateLimitWithQueryParam adds a query parameter value to the rate limiting key.
 // If the parameter is missing, rate limiting is skipped for that request.
-func WithQueryParam(param string) Option {
-	return withQueryParam(param, false)
+func RateLimitWithQueryParam(param string) RateLimitOption {
+	return rateLimitWithQueryParam(param, false)
 }
 
-// WithQueryParamRequired adds a query parameter value to the rate limiting key.
+// RateLimitWithQueryParamRequired adds a query parameter value to the rate limiting key.
 // Returns 400 Bad Request when the parameter is missing.
-func WithQueryParamRequired(param string) Option {
-	return withQueryParam(param, true)
+func RateLimitWithQueryParamRequired(param string) RateLimitOption {
+	return rateLimitWithQueryParam(param, true)
 }
 
-func withQueryParam(param string, required bool) Option {
-	return func(l *Limiter) {
-		l.keyDims = append(l.keyDims, keyDimension{
+func rateLimitWithQueryParam(param string, required bool) RateLimitOption {
+	return func(l *RateLimiter) {
+		l.keyDims = append(l.keyDims, rateLimitDimension{
 			fn: func(r *http.Request) string {
 				return r.URL.Query().Get(param)
 			},
@@ -224,8 +224,8 @@ func withQueryParam(param string, required bool) Option {
 	}
 }
 
-// New creates a new rate limiter with the given store, limit, and window.
-// Use With* options to configure key dimensions and behavior.
+// NewRateLimiter creates a new rate limiter with the given store, limit, and window.
+// Use RateLimitWith* options to configure key dimensions and behavior.
 // Returns 429 (Too Many Requests) when the limit is exceeded, with standard
 // rate limit headers and a Retry-After header indicating seconds until reset.
 // Returns 400 (Bad Request) if a *Required dimension is missing.
@@ -235,28 +235,28 @@ func withQueryParam(param string, required bool) Option {
 // Panics if no key dimensions are configured.
 //
 // Key dimension options:
-//   - WithIP: Add RemoteAddr IP to key (direct connections)
-//   - WithRealIP / WithRealIPRequired: Add X-Forwarded-For/X-Real-IP to key
-//   - WithEndpoint: Add method:path to key
-//   - WithHeader / WithHeaderRequired: Add header value to key
-//   - WithQueryParam / WithQueryParamRequired: Add query parameter to key
+//   - RateLimitWithIP: Add RemoteAddr IP to key (direct connections)
+//   - RateLimitWithRealIP / RateLimitWithRealIPRequired: Add X-Forwarded-For/X-Real-IP to key
+//   - RateLimitWithEndpoint: Add method:path to key
+//   - RateLimitWithHeader / RateLimitWithHeaderRequired: Add header value to key
+//   - RateLimitWithQueryParam / RateLimitWithQueryParamRequired: Add query parameter to key
 //
 // Other options:
-//   - WithName: Set key prefix for collision prevention
-//   - WithHeaderMode: Configure header visibility (default: HeadersAlways)
-func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limiter {
-	l := &Limiter{
+//   - RateLimitWithName: Set key prefix for collision prevention
+//   - RateLimitWithHeaderMode: Configure header visibility (default: RateLimitHeadersAlways)
+func NewRateLimiter(st store.Store, limit int, window time.Duration, opts ...RateLimitOption) *RateLimiter {
+	l := &RateLimiter{
 		store:      st,
 		limit:      int64(limit),
 		window:     window,
-		keyDims:    make([]keyDimension, 0),
-		headerMode: HeadersAlways,
+		keyDims:    make([]rateLimitDimension, 0),
+		headerMode: RateLimitHeadersAlways,
 	}
 	for _, opt := range opts {
 		opt(l)
 	}
 	if len(l.keyDims) == 0 {
-		panic("ratelimit: must configure at least one key dimension option (WithIP, WithRealIP, WithEndpoint, WithHeader, or WithQueryParam)")
+		panic("ratelimit: must configure at least one key dimension option (RateLimitWithIP, RateLimitWithRealIP, RateLimitWithEndpoint, RateLimitWithHeader, or RateLimitWithQueryParam)")
 	}
 	return l
 }
@@ -269,25 +269,23 @@ func New(st store.Store, limit int, window time.Duration, opts ...Option) *Limit
 //   - Retry-After: (only when limited) Seconds until the window resets
 //
 // These headers follow the IETF draft-ietf-httpapi-ratelimit-headers specification.
-func (l *Limiter) Handler(next http.Handler) http.Handler {
+func (l *RateLimiter) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		useWrapper := wrapper.HasState(ctx)
+		useWrapper := HasState(ctx)
 
 		key, missingDim := l.buildKey(r)
 
-		// Check for missing required dimension
 		if missingDim != "" {
 			errMsg := fmt.Sprintf("Missing required %s", missingDim)
 			if useWrapper {
-				wrapper.SetError(r, wrapper.ErrBadRequest.With(errMsg))
+				SetError(r, ErrBadRequest.With(errMsg))
 			} else {
 				http.Error(w, errMsg, http.StatusBadRequest)
 			}
 			return
 		}
 
-		// No key produced (all optional dimensions empty) - skip rate limiting
 		if key == "" {
 			next.ServeHTTP(w, r)
 			return
@@ -296,7 +294,7 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		count, ttl, err := l.store.Increment(ctx, key, l.window)
 		if err != nil {
 			if useWrapper {
-				wrapper.SetError(r, wrapper.ErrInternal.With("Rate limit check failed"))
+				SetError(r, ErrInternal.With("Rate limit check failed"))
 			} else {
 				http.Error(w, "Rate limit check failed", http.StatusInternalServerError)
 			}
@@ -307,13 +305,13 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		resetTime := time.Now().Add(ttl).Unix()
 		exceeded := count > l.limit
 
-		shouldSetHeaders := l.headerMode == HeadersAlways || (l.headerMode == HeadersOnLimitExceeded && exceeded)
+		shouldSetHeaders := l.headerMode == RateLimitHeadersAlways || (l.headerMode == RateLimitHeadersOnLimitExceeded && exceeded)
 
 		if shouldSetHeaders {
 			if useWrapper {
-				wrapper.SetHeader(r, "RateLimit-Limit", strconv.FormatInt(l.limit, 10))
-				wrapper.SetHeader(r, "RateLimit-Remaining", strconv.FormatInt(remaining, 10))
-				wrapper.SetHeader(r, "RateLimit-Reset", strconv.FormatInt(resetTime, 10))
+				SetHeader(r, "RateLimit-Limit", strconv.FormatInt(l.limit, 10))
+				SetHeader(r, "RateLimit-Remaining", strconv.FormatInt(remaining, 10))
+				SetHeader(r, "RateLimit-Reset", strconv.FormatInt(resetTime, 10))
 			} else {
 				w.Header().Set("RateLimit-Limit", strconv.FormatInt(l.limit, 10))
 				w.Header().Set("RateLimit-Remaining", strconv.FormatInt(remaining, 10))
@@ -324,13 +322,13 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 		if exceeded {
 			if shouldSetHeaders {
 				if useWrapper {
-					wrapper.SetHeader(r, "Retry-After", strconv.Itoa(int(ttl.Seconds())))
+					SetHeader(r, "Retry-After", strconv.Itoa(int(ttl.Seconds())))
 				} else {
 					w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
 				}
 			}
 			if useWrapper {
-				wrapper.SetError(r, wrapper.ErrRateLimited)
+				SetError(r, ErrRateLimited)
 			} else {
 				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			}
@@ -343,7 +341,7 @@ func (l *Limiter) Handler(next http.Handler) http.Handler {
 
 // buildKey builds the rate limit key from all dimensions.
 // Returns (key, missingDimName). If missingDimName is non-empty, a required dimension was missing.
-func (l *Limiter) buildKey(r *http.Request) (string, string) {
+func (l *RateLimiter) buildKey(r *http.Request) (string, string) {
 	var sb strings.Builder
 	sb.Grow(20 + len(l.keyDims)*30)
 	hasContent := false
