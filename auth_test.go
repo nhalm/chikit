@@ -520,7 +520,8 @@ func TestAPIKey_WhitespaceOnly(t *testing.T) {
 	}
 }
 
-func TestBearerToken_LowercaseBearer(t *testing.T) {
+func TestBearerToken_CaseInsensitive(t *testing.T) {
+	// RFC 7235: "Bearer" scheme is case-insensitive
 	validator := func(token string) bool {
 		return token == "valid-token"
 	}
@@ -529,14 +530,17 @@ func TestBearerToken_LowercaseBearer(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	req := httptest.NewRequest("GET", "/", http.NoBody)
-	req.Header.Set("Authorization", "bearer valid-token")
-	rec := httptest.NewRecorder()
+	cases := []string{"bearer valid-token", "Bearer valid-token", "BEARER valid-token", "BeArEr valid-token"}
+	for _, auth := range cases {
+		req := httptest.NewRequest("GET", "/", http.NoBody)
+		req.Header.Set("Authorization", auth)
+		rec := httptest.NewRecorder()
 
-	middleware := BearerToken(validator)
-	middleware(handler).ServeHTTP(rec, req)
+		middleware := BearerToken(validator)
+		middleware(handler).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401 for lowercase 'bearer', got %d", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected status 200 for %q (RFC 7235 case-insensitive), got %d", auth, rec.Code)
+		}
 	}
 }

@@ -343,19 +343,19 @@ Header behavior can be configured:
 // Always include headers (default)
 limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
     chikit.RateLimitWithIP(),
-    chikit.RateLimitWithHeaderMode(chikit.HeadersAlways),
+    chikit.RateLimitWithHeaderMode(chikit.RateLimitHeadersAlways),
 )
 
 // Include headers only on 429 responses
 limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
     chikit.RateLimitWithIP(),
-    chikit.RateLimitWithHeaderMode(chikit.HeadersOnLimitExceeded),
+    chikit.RateLimitWithHeaderMode(chikit.RateLimitHeadersOnLimitExceeded),
 )
 
 // Never include headers
 limiter := chikit.NewRateLimiter(st, 100, 1*time.Minute,
     chikit.RateLimitWithIP(),
-    chikit.RateLimitWithHeaderMode(chikit.HeadersNever),
+    chikit.RateLimitWithHeaderMode(chikit.RateLimitHeadersNever),
 )
 ```
 
