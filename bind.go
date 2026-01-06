@@ -54,8 +54,8 @@ type bindConfig struct {
 // BindOption configures the bind middleware.
 type BindOption func(*bindConfig)
 
-// WithFormatter sets a custom message formatter for validation errors.
-func WithFormatter(fn MessageFormatter) BindOption {
+// BindWithFormatter sets a custom message formatter for validation errors.
+func BindWithFormatter(fn MessageFormatter) BindOption {
 	return func(c *bindConfig) {
 		c.formatter = fn
 	}

@@ -147,10 +147,7 @@ func writeResponse(w http.ResponseWriter, state *State) {
 	}
 
 	if state.err != nil {
-		buf := bufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
-		defer bufferPool.Put(buf)
-
+		buf := new(bytes.Buffer)
 		if err := json.NewEncoder(buf).Encode(errorResponse{Error: state.err}); err != nil {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -164,10 +161,7 @@ func writeResponse(w http.ResponseWriter, state *State) {
 	}
 
 	if state.body != nil {
-		buf := bufferPool.Get().(*bytes.Buffer)
-		buf.Reset()
-		defer bufferPool.Put(buf)
-
+		buf := new(bytes.Buffer)
 		if err := json.NewEncoder(buf).Encode(state.body); err != nil {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusInternalServerError)

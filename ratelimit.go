@@ -327,10 +327,11 @@ func (l *RateLimiter) Handler(next http.Handler) http.Handler {
 					w.Header().Set("Retry-After", strconv.Itoa(int(ttl.Seconds())))
 				}
 			}
+			errMsg := fmt.Sprintf("Rate limit exceeded: %d requests per %s", l.limit, l.window)
 			if useWrapper {
-				SetError(r, ErrRateLimited)
+				SetError(r, ErrRateLimited.With(errMsg))
 			} else {
-				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+				http.Error(w, errMsg, http.StatusTooManyRequests)
 			}
 			return
 		}

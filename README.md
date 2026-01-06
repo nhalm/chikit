@@ -27,6 +27,28 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 go get github.com/nhalm/chikit
 ```
 
+## Quick Start
+
+```go
+r := chi.NewRouter()
+r.Use(chikit.Handler())  // Must be outermost middleware
+r.Use(chikit.Binder())   // Required for JSON/Query binding
+
+r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+    var req CreateUserRequest
+    if !chikit.JSON(r, &req) {
+        return  // Validation error already set
+    }
+    chikit.SetResponse(r, http.StatusCreated, user)
+})
+```
+
+Key points:
+- `chikit.Handler()` must be the outermost middleware - it manages response state
+- `chikit.Binder()` is required before using `chikit.JSON()` or `chikit.Query()`
+- Use `chikit.SetResponse()` and `chikit.SetError()` instead of writing directly to `http.ResponseWriter`
+- All responses are JSON with consistent error formatting
+
 ## Response Wrapper
 
 The wrapper provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and Stripe-style structured errors.
@@ -430,7 +452,7 @@ r.Use(chikit.ExtractHeader("X-Correlation-ID", "correlation_id",
 
 // With default value
 r.Use(chikit.ExtractHeader("X-Environment", "environment",
-    chikit.ExtractWithDefault("production"),
+    chikit.ExtractDefault("production"),
 ))
 
 // Retrieve in handler
@@ -498,26 +520,26 @@ Validate headers with allow/deny lists:
 ```go
 // Required header
 r.Use(chikit.ValidateHeaders(
-    chikit.ValidateHeader("X-API-Key", chikit.ValidateRequired()),
+    chikit.ValidateWithHeader("X-API-Key", chikit.ValidateRequired()),
 ))
 
 // Allow list (only specific values allowed)
 r.Use(chikit.ValidateHeaders(
-    chikit.ValidateHeader("X-Environment",
+    chikit.ValidateWithHeader("X-Environment",
         chikit.ValidateAllowList("production", "staging", "development"),
     ),
 ))
 
 // Deny list (block specific values)
 r.Use(chikit.ValidateHeaders(
-    chikit.ValidateHeader("X-Source",
+    chikit.ValidateWithHeader("X-Source",
         chikit.ValidateDenyList("blocked-client", "banned-user"),
     ),
 ))
 
 // Case-sensitive validation (default: case-insensitive)
 r.Use(chikit.ValidateHeaders(
-    chikit.ValidateHeader("X-Auth-Token",
+    chikit.ValidateWithHeader("X-Auth-Token",
         chikit.ValidateAllowList("Bearer", "Basic"),
         chikit.ValidateCaseSensitive(),
     ),
@@ -525,9 +547,9 @@ r.Use(chikit.ValidateHeaders(
 
 // Multiple header rules
 r.Use(chikit.ValidateHeaders(
-    chikit.ValidateHeader("X-API-Key", chikit.ValidateRequired()),
-    chikit.ValidateHeader("X-Environment", chikit.ValidateAllowList("production", "staging")),
-    chikit.ValidateHeader("X-Source", chikit.ValidateDenyList("blocked")),
+    chikit.ValidateWithHeader("X-API-Key", chikit.ValidateRequired()),
+    chikit.ValidateWithHeader("X-Environment", chikit.ValidateAllowList("production", "staging")),
+    chikit.ValidateWithHeader("X-Source", chikit.ValidateDenyList("blocked")),
 ))
 ```
 
@@ -583,7 +605,7 @@ r.Get("/users", func(w http.ResponseWriter, r *http.Request) {
 ### Custom Validation Messages
 
 ```go
-r.Use(chikit.Binder(chikit.BinderWithFormatter(func(field, tag, param string) string {
+r.Use(chikit.Binder(chikit.BindWithFormatter(func(field, tag, param string) string {
     switch tag {
     case "required":
         return field + " is required"
@@ -806,7 +828,7 @@ func main() {
 
     // Validate environment header
     r.Use(chikit.ValidateHeaders(
-        chikit.ValidateHeader("X-Environment",
+        chikit.ValidateWithHeader("X-Environment",
             chikit.ValidateAllowList("production", "staging", "development"),
         ),
     ))
