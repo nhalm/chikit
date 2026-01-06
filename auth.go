@@ -191,8 +191,8 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 				return
 			}
 
-			const prefix = "Bearer "
-			if !strings.HasPrefix(auth, prefix) {
+			// RFC 7235: "Bearer" scheme is case-insensitive
+			if len(auth) < 7 || !strings.EqualFold(auth[:7], "bearer ") {
 				if HasState(r.Context()) {
 					SetError(r, ErrUnauthorized.With("Invalid authorization format"))
 				} else {
@@ -201,7 +201,7 @@ func BearerToken(validator BearerTokenValidator, opts ...BearerTokenOption) func
 				return
 			}
 
-			token := strings.TrimPrefix(auth, prefix)
+			token := auth[7:] // Extract token after "Bearer "
 			if token == "" {
 				if HasState(r.Context()) {
 					SetError(r, ErrUnauthorized.With("Empty bearer token"))
