@@ -78,6 +78,9 @@ func NewRedis(config RedisConfig) (*Redis, error) {
 	if config.Prefix == "" {
 		config.Prefix = "ratelimit:"
 	}
+	if config.PoolSize > 0 && config.MinIdleConns > config.PoolSize {
+		return nil, fmt.Errorf("MinIdleConns (%d) cannot exceed PoolSize (%d)", config.MinIdleConns, config.PoolSize)
+	}
 
 	opts := &redis.Options{
 		Addr:     config.URL,
