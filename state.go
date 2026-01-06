@@ -9,7 +9,7 @@ import (
 
 type stateContextKey string
 
-const stateKey stateContextKey = "wrapper_state"
+const stateKey stateContextKey = "chikit_state"
 
 // State holds the response state for a request.
 type State struct {

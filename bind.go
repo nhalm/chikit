@@ -181,8 +181,8 @@ func RegisterValidation(tag string, fn validator.Func) error {
 }
 
 func translateErrors(err error, formatter MessageFormatter) []FieldError {
-	errs, ok := err.(validator.ValidationErrors)
-	if !ok {
+	var errs validator.ValidationErrors
+	if !errors.As(err, &errs) {
 		return []FieldError{{
 			Param:   "",
 			Code:    "validation",
