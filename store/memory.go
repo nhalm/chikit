@@ -99,6 +99,9 @@ func (m *Memory) Reset(_ context.Context, key string) error {
 // Close stops the background cleanup goroutine and releases resources.
 func (m *Memory) Close() error {
 	close(m.stopCh)
+	m.mu.Lock()
+	m.entries = nil
+	m.mu.Unlock()
 	return nil
 }
 

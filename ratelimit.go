@@ -340,8 +340,13 @@ func (l *RateLimiter) Handler(next http.Handler) http.Handler {
 	})
 }
 
+// maxKeyComponentSize limits individual key components to prevent memory exhaustion
+// from malicious headers or query parameters.
+const maxKeyComponentSize = 256
+
 // buildKey builds the rate limit key from all dimensions.
 // Returns (key, missingDimName). If missingDimName is non-empty, a required dimension was missing.
+// Key components are truncated to maxKeyComponentSize to prevent memory exhaustion.
 func (l *RateLimiter) buildKey(r *http.Request) (string, string) {
 	var sb strings.Builder
 	sb.Grow(20 + len(l.keyDims)*30)
@@ -359,6 +364,9 @@ func (l *RateLimiter) buildKey(r *http.Request) (string, string) {
 				return "", dim.name
 			}
 			continue
+		}
+		if len(part) > maxKeyComponentSize {
+			part = part[:maxKeyComponentSize]
 		}
 		if hasContent {
 			sb.WriteByte(':')

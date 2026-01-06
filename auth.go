@@ -16,6 +16,9 @@ const (
 // APIKeyValidator validates an API key and returns true if valid.
 // The validator function is provided by the application and can check
 // against a database, cache, or any other validation mechanism.
+//
+// Thread safety: Validators are called concurrently from multiple goroutines
+// and must be safe for concurrent use. Avoid shared mutable state.
 type APIKeyValidator func(key string) bool
 
 // apiKeyConfig configures the APIKey middleware.
@@ -131,6 +134,9 @@ func APIKeyFromContext(ctx context.Context) (string, bool) {
 // BearerTokenValidator validates a bearer token and returns true if valid.
 // The validator function is provided by the application and can perform
 // JWT validation, token lookup, or any other validation mechanism.
+//
+// Thread safety: Validators are called concurrently from multiple goroutines
+// and must be safe for concurrent use. Avoid shared mutable state.
 type BearerTokenValidator func(token string) bool
 
 // bearerTokenConfig configures the BearerToken middleware.
