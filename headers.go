@@ -89,6 +89,13 @@ func ExtractWithValidator(fn func(string) (any, error)) HeaderExtractorOption {
 //	r.Use(chikit.ExtractHeader("X-Client-Version", "version",
 //		chikit.ExtractDefault("1.0.0")))
 func ExtractHeader(header, ctxKey string, opts ...HeaderExtractorOption) func(http.Handler) http.Handler {
+	if header == "" {
+		panic("ExtractHeader: header must be non-empty")
+	}
+	if ctxKey == "" {
+		panic("ExtractHeader: ctxKey must be non-empty")
+	}
+
 	h := &HeaderExtractor{
 		header: header,
 		ctxKey: headerContextKey(ctxKey),

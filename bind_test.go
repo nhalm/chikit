@@ -267,7 +267,7 @@ func TestCustomFormatter(t *testing.T) {
 		return "CUSTOM:" + field + ":" + tag
 	}
 
-	handler := Handler()(Binder(WithFormatter(customFormatter))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := Handler()(Binder(BindWithFormatter(customFormatter))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		var req CreateUserRequest
 		if !JSON(r, &req) {
 			return

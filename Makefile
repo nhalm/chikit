@@ -1,4 +1,4 @@
-.PHONY: test test-race test-cover test-redis test-all lint fmt vet clean docker-up docker-down
+.PHONY: test test-race test-cover test-redis test-all lint fmt vet clean docker-up docker-down install-tools docs
 
 test:
 	go test -v ./...
@@ -47,3 +47,11 @@ check: fmt vet lint test-race
 clean:
 	rm -f coverage.out coverage.html
 	go clean -testcache
+
+install-tools:
+	@which golangci-lint > /dev/null || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	@echo "Tools installed"
+
+docs:
+	@echo "Starting godoc server at http://localhost:6060/pkg/github.com/nhalm/chikit/"
+	@godoc -http=:6060

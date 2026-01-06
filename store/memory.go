@@ -32,7 +32,10 @@ type Memory struct {
 
 // NewMemory creates a new in-memory store with automatic cleanup of expired entries.
 // A background goroutine runs every minute to remove expired entries and prevent
-// unbounded memory growth. Call Close when done to stop the cleanup goroutine.
+// unbounded memory growth.
+//
+// Important: You must call Close() when done to stop the cleanup goroutine.
+// Failing to call Close() will result in a goroutine leak.
 func NewMemory() *Memory {
 	m := &Memory{
 		entries: make(map[string]*memoryEntry),
@@ -46,6 +49,9 @@ func NewMemory() *Memory {
 // Increment atomically increments the counter for the given key and returns the new count, TTL, and any error.
 // If the key doesn't exist or has expired, creates a new entry with count=1.
 // The operation is atomic due to the write lock, ensuring accuracy under concurrent load.
+//
+// Note: The context parameter is accepted for interface compatibility but is not used.
+// In-memory operations complete immediately and cannot be cancelled.
 func (m *Memory) Increment(_ context.Context, key string, window time.Duration) (int64, time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

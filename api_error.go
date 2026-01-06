@@ -6,9 +6,7 @@
 package chikit
 
 import (
-	"bytes"
 	"net/http"
-	"sync"
 )
 
 // APIError represents a structured API error response.
@@ -30,10 +28,6 @@ type FieldError struct {
 
 type errorResponse struct {
 	Error *APIError `json:"error"`
-}
-
-var bufferPool = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
 }
 
 // Error implements the error interface.
