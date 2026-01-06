@@ -14,6 +14,7 @@ package chikit
 
 import (
 	"fmt"
+	"mime"
 	"net/http"
 	"strings"
 )
@@ -159,8 +160,15 @@ func validateHeaderRule(r *http.Request, rule *ValidateHeaderConfig) *APIError {
 	}
 
 	checkValue := value
+	// Strip media type parameters (e.g., charset=utf-8) for proper matching
+	// Example: "application/json; charset=utf-8" → "application/json"
+	if _, _, err := mime.ParseMediaType(value); err == nil {
+		if idx := strings.Index(value, ";"); idx != -1 {
+			checkValue = strings.TrimSpace(value[:idx])
+		}
+	}
 	if !rule.CaseSensitive {
-		checkValue = strings.ToLower(value)
+		checkValue = strings.ToLower(checkValue)
 	}
 
 	if err := validateCheckAllowList(rule, checkValue); err != nil {
