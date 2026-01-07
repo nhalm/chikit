@@ -962,3 +962,43 @@ func TestWaitForHandlers_Timeout(t *testing.T) {
 
 	<-handlerDone
 }
+
+func TestHandler_Timeout_StateFrozenAfterWrite(t *testing.T) {
+	handlerDone := make(chan struct{})
+
+	handler := Handler(WithTimeout(20 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		<-r.Context().Done()
+		time.Sleep(10 * time.Millisecond)
+		// These should be no-ops since state is frozen after 504 is written
+		SetError(r, ErrNotFound.With("Should be ignored"))
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ignored"})
+		SetHeader(r, "X-Ignored", "value")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	<-handlerDone
+
+	// Verify 504 was written, not the handler's response
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	// Verify the ignored header wasn't set
+	if rec.Header().Get("X-Ignored") != "" {
+		t.Error("expected X-Ignored header to not be set after state frozen")
+	}
+
+	var body map[string]*APIError
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["error"].Code != "gateway_timeout" {
+		t.Errorf("expected code gateway_timeout, got %s", body["error"].Code)
+	}
+}
