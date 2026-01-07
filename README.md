@@ -11,6 +11,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 ## Features
 
 - **Response Wrapper**: Context-based response handling with structured JSON errors
+- **Request Timeout**: Hard-cutoff timeout with 504 response, context cancellation for DB/HTTP calls
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
@@ -109,6 +110,7 @@ chikit.ErrRateLimited         // 429
 chikit.ErrInternal            // 500
 chikit.ErrNotImplemented      // 501
 chikit.ErrServiceUnavailable  // 503
+chikit.ErrGatewayTimeout      // 504
 
 // Customize message
 chikit.SetError(r, chikit.ErrNotFound.With("User not found"))
@@ -196,6 +198,75 @@ r.Get("/panic", func(w http.ResponseWriter, r *http.Request) {
     panic("something went wrong")  // Returns {"error": {"type": "internal_error", ...}}
 })
 ```
+
+### Request Timeout
+
+Add hard-cutoff timeouts that guarantee response time:
+
+```go
+r.Use(chikit.Handler(
+    chikit.WithTimeout(30*time.Second),
+    chikit.WithCanonlog(),
+))
+
+r.Get("/slow", func(w http.ResponseWriter, r *http.Request) {
+    // If this takes longer than 30s, the client gets a 504 immediately.
+    // The context is cancelled so DB/HTTP calls can exit early.
+    result, err := slowDatabaseQuery(r.Context())
+    if err != nil {
+        // Handle context.DeadlineExceeded gracefully
+        if errors.Is(err, context.DeadlineExceeded) {
+            return // Timeout already handled by middleware
+        }
+        chikit.SetError(r, chikit.ErrInternal.With("Query failed"))
+        return
+    }
+    chikit.SetResponse(r, http.StatusOK, result)
+})
+```
+
+**How it works:**
+1. Handler runs in a goroutine with `context.WithTimeout()`
+2. If timeout fires, a 504 Gateway Timeout is written immediately
+3. The context is cancelled so DB/HTTP calls see the deadline and can exit early
+4. After the grace timeout (default 5s), the handler is considered abandoned
+
+**Timeout options:**
+
+| Option | Description |
+|--------|-------------|
+| `WithTimeout(d)` | Maximum handler execution time |
+| `WithGraceTimeout(d)` | How long to wait for handler to exit after timeout (default 5s) |
+| `WithAbandonCallback(fn)` | Called when handler doesn't exit within grace period |
+
+**Graceful shutdown:**
+
+When using timeouts, handlers run in goroutines. For graceful shutdown, wait for all handlers to complete:
+
+```go
+func main() {
+    r := chi.NewRouter()
+    r.Use(chikit.Handler(chikit.WithTimeout(30 * time.Second)))
+    // ... routes ...
+
+    srv := &http.Server{Addr: ":8080", Handler: r}
+    go srv.ListenAndServe()
+
+    // Wait for shutdown signal
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+    <-sigCh
+
+    // Graceful shutdown
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    srv.Shutdown(ctx)           // Wait for in-flight requests
+    chikit.WaitForHandlers(ctx) // Wait for handler goroutines
+}
+```
+
+**Important limitation:** Go cannot forcibly terminate goroutines. If your handler ignores context cancellation (tight CPU loops, blocking syscalls, legacy code without context), the goroutine continues running after the 504 response. Use `WithAbandonCallback` to track this with metrics.
 
 ### Canonical Logging
 
@@ -790,8 +861,12 @@ Routes without `chikit.SLO()` middleware won't have SLO fields in logs:
 package main
 
 import (
+    "context"
     "log"
     "net/http"
+    "os"
+    "os/signal"
+    "syscall"
     "time"
 
     "github.com/go-chi/chi/v5"
@@ -822,8 +897,9 @@ func main() {
     r.Use(middleware.RequestID)
     r.Use(middleware.RealIP)
 
-    // Wrapper with canonlog and SLO logging
+    // Wrapper with timeout, canonlog, and SLO logging
     r.Use(chikit.Handler(
+        chikit.WithTimeout(30*time.Second),
         chikit.WithCanonlog(),
         chikit.WithCanonlogFields(func(r *http.Request) map[string]any {
             return map[string]any{
@@ -897,7 +973,24 @@ func main() {
         r.With(chikit.SLO(chikit.SLOHighSlow)).Post("/reports", generateReport)
     })
 
-    log.Fatal(http.ListenAndServe(":8080", r))
+    srv := &http.Server{Addr: ":8080", Handler: r}
+    go func() {
+        if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+            log.Fatal(err)
+        }
+    }()
+
+    // Wait for shutdown signal
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+    <-sigCh
+
+    // Graceful shutdown
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    srv.Shutdown(ctx)
+    chikit.WaitForHandlers(ctx) // Wait for handler goroutines when using WithTimeout
 }
 
 func validateAPIKey(key string) bool {
