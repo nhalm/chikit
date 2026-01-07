@@ -112,4 +112,4 @@ jobs:
     - name: Download dependencies
       run: go mod download
     - name: Run Redis integration tests
-      run: REDIS_URL=localhost:6379 go test -v ./ratelimit/store -run TestRedis
+      run: REDIS_URL=localhost:6379 go test -v ./store -run TestRedis
