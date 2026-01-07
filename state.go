@@ -18,6 +18,20 @@ type State struct {
 	status  int
 	body    any
 	headers http.Header
+	written bool
+}
+
+// markWritten attempts to mark the state as written.
+// Returns true if this call successfully marked it (first caller wins).
+// Returns false if already written (second caller should not write).
+func (s *State) markWritten() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.written {
+		return false
+	}
+	s.written = true
+	return true
 }
 
 // HasState returns true if wrapper state exists in the context.

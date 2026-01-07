@@ -84,6 +84,7 @@ var (
 	ErrInternal            = &APIError{Type: "internal_error", Code: "internal", Message: "Internal server error", Status: http.StatusInternalServerError}
 	ErrNotImplemented      = &APIError{Type: "request_error", Code: "not_implemented", Message: "Not implemented", Status: http.StatusNotImplemented}
 	ErrServiceUnavailable  = &APIError{Type: "request_error", Code: "service_unavailable", Message: "Service unavailable", Status: http.StatusServiceUnavailable}
+	ErrGatewayTimeout      = &APIError{Type: "timeout_error", Code: "gateway_timeout", Message: "Request timed out", Status: http.StatusGatewayTimeout}
 )
 
 // NewValidationError creates a validation error with multiple field errors.

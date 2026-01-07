@@ -108,3 +108,31 @@ func ExampleValidateHeaders() {
 		),
 	))
 }
+
+func ExampleHandler_timeout() {
+	r := chi.NewRouter()
+	r.Use(chikit.Handler(
+		chikit.WithTimeout(30*time.Second),
+		chikit.WithCanonlog(),
+	))
+
+	r.Get("/", func(_ http.ResponseWriter, r *http.Request) {
+		// Handler code runs with a 30-second deadline.
+		// If the handler doesn't complete in time, a 504 Gateway Timeout
+		// is returned to the client immediately.
+		chikit.SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	})
+}
+
+func ExampleHandler_timeoutWithGrace() {
+	r := chi.NewRouter()
+	r.Use(chikit.Handler(
+		chikit.WithTimeout(30*time.Second),
+		chikit.WithGraceTimeout(10*time.Second),
+		chikit.WithAbandonCallback(func(r *http.Request) {
+			// Handler didn't exit within grace period after timeout.
+			// Log this for investigation - may indicate a stuck handler.
+			fmt.Printf("handler abandoned: %s %s\n", r.Method, r.URL.Path)
+		}),
+	))
+}

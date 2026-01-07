@@ -1,12 +1,14 @@
 package chikit
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nhalm/canonlog"
@@ -265,6 +267,7 @@ func TestAllSentinelErrors(t *testing.T) {
 		ErrInternal,
 		ErrNotImplemented,
 		ErrServiceUnavailable,
+		ErrGatewayTimeout,
 	}
 
 	for _, sentinel := range sentinels {
@@ -648,4 +651,314 @@ func TestWithCanonlog_PanicLogging(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
+}
+
+func TestHandler_Timeout_Fires(t *testing.T) {
+	handler := Handler(WithTimeout(50 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(200 * time.Millisecond):
+			SetResponse(r, http.StatusOK, map[string]string{"status": "completed"})
+		case <-r.Context().Done():
+		}
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	var body map[string]*APIError
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["error"].Code != "gateway_timeout" {
+		t.Errorf("expected code gateway_timeout, got %s", body["error"].Code)
+	}
+}
+
+func TestHandler_Timeout_NotFired(t *testing.T) {
+	handler := Handler(WithTimeout(200 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["status"] != "ok" {
+		t.Errorf("expected status ok, got %s", body["status"])
+	}
+}
+
+func TestHandler_Timeout_HandlerPanics(t *testing.T) {
+	handler := Handler(WithTimeout(200 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("handler panic")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	var body map[string]*APIError
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["error"].Type != "internal_error" {
+		t.Errorf("expected type internal_error, got %s", body["error"].Type)
+	}
+}
+
+func TestHandler_Timeout_PanicAfterTimeout(t *testing.T) {
+	handler := Handler(
+		WithTimeout(20*time.Millisecond),
+		WithGraceTimeout(100*time.Millisecond),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		time.Sleep(10 * time.Millisecond)
+		panic("panic after timeout")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+}
+
+func TestHandler_Timeout_DoubleWrite(t *testing.T) {
+	handler := Handler(WithTimeout(20 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		time.Sleep(10 * time.Millisecond)
+		SetResponse(r, http.StatusOK, map[string]string{"status": "late"})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d (timeout wins), got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	var body map[string]*APIError
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body["error"].Code != "gateway_timeout" {
+		t.Errorf("expected code gateway_timeout (timeout wins), got %s", body["error"].Code)
+	}
+}
+
+func TestHandler_Timeout_ContextCancelled(t *testing.T) {
+	var ctxErr error
+
+	handler := Handler(WithTimeout(20 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-r.Context().Done():
+			ctxErr = r.Context().Err()
+		}
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	if ctxErr == nil {
+		t.Error("expected context to be cancelled")
+	}
+}
+
+func TestHandler_Timeout_GraceTimeout(t *testing.T) {
+	handlerExited := make(chan struct{})
+
+	handler := Handler(
+		WithTimeout(20*time.Millisecond),
+		WithGraceTimeout(100*time.Millisecond),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		defer close(handlerExited)
+		<-r.Context().Done()
+		time.Sleep(30 * time.Millisecond)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	select {
+	case <-handlerExited:
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected handler to exit within grace period")
+	}
+}
+
+func TestHandler_Timeout_Abandoned(t *testing.T) {
+	var abandonCalled bool
+	var abandonMu sync.Mutex
+
+	handler := Handler(
+		WithTimeout(20*time.Millisecond),
+		WithGraceTimeout(30*time.Millisecond),
+		WithAbandonCallback(func(_ *http.Request) {
+			abandonMu.Lock()
+			abandonCalled = true
+			abandonMu.Unlock()
+		}),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+
+	abandonMu.Lock()
+	called := abandonCalled
+	abandonMu.Unlock()
+
+	if !called {
+		t.Error("expected abandon callback to be called")
+	}
+}
+
+func TestHandler_Timeout_NoTimeoutConfigured(t *testing.T) {
+	handler := Handler()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Millisecond)
+		SetResponse(r, http.StatusOK, map[string]string{"status": "ok"})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestHandler_Timeout_WithCanonlog(t *testing.T) {
+	handler := Handler(
+		WithTimeout(20*time.Millisecond),
+		WithCanonlog(),
+	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+			SetResponse(r, http.StatusOK, nil)
+		case <-r.Context().Done():
+		}
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status %d, got %d", http.StatusGatewayTimeout, rec.Code)
+	}
+}
+
+func TestWaitForHandlers(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	handlerDone := make(chan struct{})
+
+	handler := Handler(WithTimeout(500 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(handlerStarted)
+		time.Sleep(50 * time.Millisecond)
+		SetResponse(r, http.StatusOK, nil)
+		close(handlerDone)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	go handler.ServeHTTP(rec, req)
+
+	<-handlerStarted
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := WaitForHandlers(ctx)
+	if err != nil {
+		t.Errorf("expected WaitForHandlers to succeed, got: %v", err)
+	}
+
+	select {
+	case <-handlerDone:
+	default:
+		t.Error("expected handler to have completed")
+	}
+}
+
+func TestWaitForHandlers_Timeout(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	handlerDone := make(chan struct{})
+
+	handler := Handler(WithTimeout(500 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		close(handlerStarted)
+		time.Sleep(200 * time.Millisecond)
+		SetResponse(r, http.StatusOK, nil)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	go handler.ServeHTTP(rec, req)
+
+	<-handlerStarted
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := WaitForHandlers(ctx)
+	if err == nil {
+		t.Error("expected WaitForHandlers to timeout")
+	}
+
+	<-handlerDone
 }
