@@ -30,17 +30,30 @@ go get github.com/nhalm/chikit
 ## Quick Start
 
 ```go
-r := chi.NewRouter()
-r.Use(chikit.Handler())  // Must be outermost middleware
-r.Use(chikit.Binder())   // Required for JSON/Query binding
+import (
+    "net/http"
 
-r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
-    var req CreateUserRequest
-    if !chikit.JSON(r, &req) {
-        return  // Validation error already set
-    }
-    chikit.SetResponse(r, http.StatusCreated, user)
-})
+    "github.com/go-chi/chi/v5"
+    "github.com/nhalm/chikit"
+)
+
+func main() {
+    r := chi.NewRouter()
+
+    // chikit middleware (Handler must be outermost)
+    r.Use(chikit.Handler())
+    r.Use(chikit.Binder())  // Required for JSON/Query binding
+
+    r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+        var req CreateUserRequest
+        if !chikit.JSON(r, &req) {
+            return  // Validation error already set
+        }
+        chikit.SetResponse(r, http.StatusCreated, user)
+    })
+
+    http.ListenAndServe(":8080", r)
+}
 ```
 
 Key points:
