@@ -2,6 +2,8 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://go.dev/doc/install)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nhalm/chikit.svg)](https://pkg.go.dev/github.com/nhalm/chikit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/nhalm/chikit)](https://goreportcard.com/report/github.com/nhalm/chikit)
+[![Latest Release](https://img.shields.io/github/v/release/nhalm/chikit)](https://github.com/nhalm/chikit/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Production-grade Chi middleware library for distributed systems. Part of the *kit ecosystem (alongside [pgxkit](https://github.com/nhalm/pgxkit)) providing focused, high-quality Go libraries.
