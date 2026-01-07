@@ -10,7 +10,7 @@ Follows 12-factor app principles with all configuration via explicit parametersâ
 
 ## Features
 
-- **Response Wrapper**: Context-based response handling with Stripe-style structured errors
+- **Response Wrapper**: Context-based response handling with structured JSON errors
 - **Flexible Rate Limiting**: Multi-dimensional rate limiting with Redis support for distributed deployments
 - **Header Management**: Extract and validate headers with context injection
 - **Request Validation**: Body size limits, query parameter validation, header allow/deny lists
@@ -64,7 +64,7 @@ Key points:
 
 ## Response Wrapper
 
-The wrapper provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and Stripe-style structured errors.
+The wrapper provides context-based response handling. Handlers and middleware set responses in request context rather than writing directly to ResponseWriter, enabling consistent JSON responses and structured errors.
 
 ### Basic Usage
 
@@ -91,7 +91,7 @@ func main() {
 
 ### Structured Errors
 
-Errors follow Stripe's API error format:
+Errors follow a structured format:
 
 ```go
 // Predefined sentinel errors
