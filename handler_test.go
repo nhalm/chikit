@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -733,7 +734,7 @@ func TestHandler_Timeout_HandlerPanics(t *testing.T) {
 func TestHandler_Timeout_PanicAfterTimeout(t *testing.T) {
 	handler := Handler(
 		WithTimeout(20*time.Millisecond),
-		WithGraceTimeout(100*time.Millisecond),
+		WithGracefulShutdown(100*time.Millisecond),
 	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		time.Sleep(10 * time.Millisecond)
@@ -806,7 +807,7 @@ func TestHandler_Timeout_GraceTimeout(t *testing.T) {
 
 	handler := Handler(
 		WithTimeout(20*time.Millisecond),
-		WithGraceTimeout(100*time.Millisecond),
+		WithGracefulShutdown(100*time.Millisecond),
 	)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		defer close(handlerExited)
 		<-r.Context().Done()
@@ -835,7 +836,7 @@ func TestHandler_Timeout_Abandoned(t *testing.T) {
 
 	handler := Handler(
 		WithTimeout(20*time.Millisecond),
-		WithGraceTimeout(30*time.Millisecond),
+		WithGracefulShutdown(30*time.Millisecond),
 		WithAbandonCallback(func(_ *http.Request) {
 			abandonMu.Lock()
 			abandonCalled = true
@@ -1000,5 +1001,67 @@ func TestHandler_Timeout_StateFrozenAfterWrite(t *testing.T) {
 
 	if body["error"].Code != "gateway_timeout" {
 		t.Errorf("expected code gateway_timeout, got %s", body["error"].Code)
+	}
+}
+
+func TestHandler_Timeout_Concurrent(t *testing.T) {
+	const numRequests = 10
+
+	handler := Handler(WithTimeout(50 * time.Millisecond))(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		// Half the requests time out, half succeed
+		if r.URL.Path == "/slow" {
+			<-r.Context().Done()
+			return
+		}
+		SetResponse(r, http.StatusOK, map[string]string{"path": r.URL.Path})
+	}))
+
+	var wg sync.WaitGroup
+	results := make(chan int, numRequests*2)
+
+	// Launch concurrent requests - half slow, half fast
+	for i := range numRequests {
+		wg.Add(2)
+
+		// Slow request (will timeout)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/slow", http.NoBody)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			results <- rec.Code
+		}()
+
+		// Fast request (will succeed)
+		go func(n int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/fast/%d", n), http.NoBody)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			results <- rec.Code
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Count results
+	var timeouts, successes int
+	for code := range results {
+		switch code {
+		case http.StatusGatewayTimeout:
+			timeouts++
+		case http.StatusOK:
+			successes++
+		default:
+			t.Errorf("unexpected status code: %d", code)
+		}
+	}
+
+	if timeouts != numRequests {
+		t.Errorf("expected %d timeouts, got %d", numRequests, timeouts)
+	}
+	if successes != numRequests {
+		t.Errorf("expected %d successes, got %d", numRequests, successes)
 	}
 }

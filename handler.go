@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,16 +17,19 @@ import (
 // activeHandlers tracks spawned handler goroutines for graceful shutdown.
 var activeHandlers sync.WaitGroup
 
+// activeHandlerCount tracks the count for ActiveHandlerCount().
+var activeHandlerCount atomic.Int64
+
 // HandlerOption configures the Handler middleware.
 type HandlerOption func(*config)
 
 type config struct {
-	canonlog       bool
-	canonlogFields func(*http.Request) map[string]any
-	slosEnabled    bool
-	timeout        time.Duration
-	graceTimeout   time.Duration
-	onAbandon      func(*http.Request)
+	canonlog         bool
+	canonlogFields   func(*http.Request) map[string]any
+	slosEnabled      bool
+	timeout          time.Duration
+	gracefulShutdown time.Duration
+	onAbandon        func(*http.Request)
 }
 
 // WithCanonlog enables canonical logging for requests.
@@ -63,23 +67,33 @@ func WithSLOs() HandlerOption {
 // can exit early. The handler goroutine continues running but its response
 // is discarded.
 //
-// When timeout is enabled, handlers run in a separate goroutine. Use
-// WaitForHandlers during graceful shutdown to wait for all handler goroutines.
+// When timeout is enabled, handlers run in a separate goroutine. You MUST call
+// WaitForHandlers during graceful shutdown to wait for handler goroutines to
+// complete before process exit. See WaitForHandlers for the shutdown pattern.
+//
+// Default graceful shutdown timeout is 5 seconds. Use WithGracefulShutdown to
+// change this value. Options can be specified in any order.
+//
+// Note: Go cannot forcibly terminate goroutines. If handlers ignore context
+// cancellation (CGO calls, tight CPU loops), they continue running after the
+// 504 response. Use WithAbandonCallback to track this with metrics.
 func WithTimeout(d time.Duration) HandlerOption {
 	return func(c *config) {
 		c.timeout = d
-		if c.graceTimeout == 0 {
-			c.graceTimeout = 5 * time.Second
-		}
 	}
 }
 
-// WithGraceTimeout sets how long to wait for a handler to exit after timeout.
-// After the grace period, the handler is considered abandoned and logged.
-// Default is 5 seconds.
-func WithGraceTimeout(d time.Duration) HandlerOption {
+// WithGracefulShutdown sets how long to wait for a handler goroutine to exit
+// after timeout fires. This grace period allows handlers to complete cleanup
+// (e.g., database rollbacks) after the 504 response is sent to the client.
+//
+// After the grace period, the handler is considered abandoned. If canonlog is
+// enabled, an error is logged. Use WithAbandonCallback for metrics/alerting.
+//
+// Default is 5 seconds. Can be specified before or after WithTimeout.
+func WithGracefulShutdown(d time.Duration) HandlerOption {
 	return func(c *config) {
-		c.graceTimeout = d
+		c.gracefulShutdown = d
 	}
 }
 
@@ -96,6 +110,17 @@ func Handler(opts ...HandlerOption) func(http.Handler) http.Handler {
 	cfg := &config{}
 	for _, opt := range opts {
 		opt(cfg)
+	}
+
+	// Apply defaults and validation
+	if cfg.timeout > 0 && cfg.gracefulShutdown == 0 {
+		cfg.gracefulShutdown = 5 * time.Second
+	}
+	if cfg.timeout < 0 {
+		cfg.timeout = 0 // Treat negative as disabled
+	}
+	if cfg.gracefulShutdown < 0 {
+		cfg.gracefulShutdown = 0
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -149,8 +174,10 @@ func handleWithTimeout(parentCtx context.Context, cfg *config, next http.Handler
 	panicVal := make(chan any, 1)
 
 	activeHandlers.Add(1)
+	activeHandlerCount.Add(1)
 	go func() {
 		defer activeHandlers.Done()
+		defer activeHandlerCount.Add(-1)
 		defer close(done)
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -203,7 +230,7 @@ func waitForGrace(ctx context.Context, cfg *config, r *http.Request, done <-chan
 			}
 		default:
 		}
-	case <-time.After(cfg.graceTimeout):
+	case <-time.After(cfg.gracefulShutdown):
 		if cfg.canonlog {
 			canonlog.ErrorAdd(ctx, fmt.Errorf("handler abandoned after grace timeout"))
 		}
@@ -258,18 +285,39 @@ func flushCanonlog(ctx context.Context, cfg *config, state *State, r *http.Reque
 // Call this during graceful shutdown after http.Server.Shutdown().
 // Returns nil if all handlers complete, or ctx.Err() if the context
 // deadline is exceeded.
+//
+// Example graceful shutdown pattern:
+//
+//	srv := &http.Server{Addr: ":8080", Handler: r}
+//	go srv.ListenAndServe()
+//	<-shutdownSignal
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	srv.Shutdown(ctx)           // Wait for in-flight requests
+//	chikit.WaitForHandlers(ctx) // Wait for handler goroutines
+//
+// Note: If the context deadline is exceeded, WaitForHandlers returns immediately.
+// Use ActiveHandlerCount to monitor how many handlers are still running.
 func WaitForHandlers(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		activeHandlers.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for {
+		if activeHandlerCount.Load() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+			// Poll again
+		}
 	}
+}
+
+// ActiveHandlerCount returns the number of handler goroutines currently running.
+// This is useful for monitoring during graceful shutdown or for metrics.
+// Only counts handlers started with WithTimeout enabled.
+func ActiveHandlerCount() int {
+	// We can't directly read WaitGroup counter, so we track separately
+	return int(activeHandlerCount.Load())
 }
 
 func writeResponse(w http.ResponseWriter, state *State) {

@@ -128,7 +128,7 @@ func ExampleHandler_timeoutWithGrace() {
 	r := chi.NewRouter()
 	r.Use(chikit.Handler(
 		chikit.WithTimeout(30*time.Second),
-		chikit.WithGraceTimeout(10*time.Second),
+		chikit.WithGracefulShutdown(10*time.Second),
 		chikit.WithAbandonCallback(func(r *http.Request) {
 			// Handler didn't exit within grace period after timeout.
 			// Log this for investigation - may indicate a stuck handler.
