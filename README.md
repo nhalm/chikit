@@ -236,7 +236,7 @@ r.Get("/slow", func(w http.ResponseWriter, r *http.Request) {
 | Option | Description |
 |--------|-------------|
 | `WithTimeout(d)` | Maximum handler execution time |
-| `WithGraceTimeout(d)` | How long to wait for handler to exit after timeout (default 5s) |
+| `WithGracefulShutdown(d)` | Grace period after 504 is written for handler cleanup (default 5s) |
 | `WithAbandonCallback(fn)` | Called when handler doesn't exit within grace period |
 
 **Graceful shutdown:**
@@ -266,7 +266,7 @@ func main() {
 }
 ```
 
-**Important limitation:** Go cannot forcibly terminate goroutines. If your handler ignores context cancellation (tight CPU loops, blocking syscalls, legacy code without context), the goroutine continues running after the 504 response. Use `WithAbandonCallback` to track this with metrics.
+**Important limitation:** Go cannot forcibly terminate goroutines. If your handler ignores context cancellation (CGO calls, tight CPU loops, legacy code without context), the goroutine continues running after the 504 response. Use `WithAbandonCallback` to track this with metrics. If a handler panics after timeout fires, the panic is caught and logged but the 504 response has already been sent to the client.
 
 ### Canonical Logging
 
