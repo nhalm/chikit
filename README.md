@@ -639,7 +639,7 @@ r.Use(chikit.ValidateHeaders(
 
 ## Request Binding
 
-The bind functions provide JSON body and query parameter binding with validation using go-playground/validator/v10.
+The bind functions provide JSON body and query parameter binding with validation using [go-playground/validator/v10](https://github.com/go-playground/validator).
 
 ### JSON Binding
 
