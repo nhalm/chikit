@@ -140,8 +140,8 @@ func handleSync(ctx context.Context, cfg *config, next http.Handler, w http.Resp
 	next.ServeHTTP(w, r)
 }
 
-func handleWithTimeout(ctx context.Context, cfg *config, next http.Handler, w http.ResponseWriter, r *http.Request, state *State, start time.Time) {
-	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+func handleWithTimeout(parentCtx context.Context, cfg *config, next http.Handler, w http.ResponseWriter, r *http.Request, state *State, start time.Time) {
+	ctx, cancel := context.WithTimeout(parentCtx, cfg.timeout)
 	defer cancel()
 
 	r = r.WithContext(ctx)
@@ -162,8 +162,8 @@ func handleWithTimeout(ctx context.Context, cfg *config, next http.Handler, w ht
 
 	select {
 	case <-done:
-		handlePanic(ctx, cfg, state, panicVal)
-		flushCanonlog(ctx, cfg, state, r, start)
+		handlePanic(parentCtx, cfg, state, panicVal)
+		flushCanonlog(parentCtx, cfg, state, r, start)
 		if state.markWritten() {
 			writeResponse(w, state)
 		}
@@ -175,8 +175,8 @@ func handleWithTimeout(ctx context.Context, cfg *config, next http.Handler, w ht
 		if state.markWritten() {
 			writeResponse(w, state)
 		}
-		waitForGrace(ctx, cfg, r, done, panicVal)
-		flushCanonlog(ctx, cfg, state, r, start)
+		waitForGrace(parentCtx, cfg, r, done, panicVal)
+		flushCanonlog(parentCtx, cfg, state, r, start)
 	}
 }
 
@@ -218,13 +218,14 @@ func flushCanonlog(ctx context.Context, cfg *config, state *State, r *http.Reque
 		return
 	}
 
-	state.mu.Lock()
-	status := state.status
-	if state.err != nil {
-		status = state.err.Status
-		canonlog.ErrorAdd(ctx, state.err)
+	// Take a snapshot to safely read state (handler may still be running)
+	snap := state.snapshot()
+
+	status := snap.status
+	if snap.err != nil {
+		status = snap.err.Status
+		canonlog.ErrorAdd(ctx, snap.err)
 	}
-	state.mu.Unlock()
 
 	route := r.URL.Path
 	if rctx := chi.RouteContext(ctx); rctx != nil {

@@ -4,6 +4,7 @@ import "net/http"
 
 // SetError sets an error response in the request context.
 // If wrapper middleware is not present (state is nil), this is a no-op.
+// If state is frozen (response already written), this is a no-op.
 // Use HasState() to check if wrapper middleware is active.
 func SetError(r *http.Request, err *APIError) {
 	state := getState(r.Context())
@@ -12,11 +13,15 @@ func SetError(r *http.Request, err *APIError) {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.frozen {
+		return
+	}
 	state.err = err
 }
 
 // SetResponse sets a success response in the request context.
 // If wrapper middleware is not present (state is nil), this is a no-op.
+// If state is frozen (response already written), this is a no-op.
 // Use HasState() to check if wrapper middleware is active.
 func SetResponse(r *http.Request, status int, body any) {
 	state := getState(r.Context())
@@ -25,12 +30,16 @@ func SetResponse(r *http.Request, status int, body any) {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.frozen {
+		return
+	}
 	state.status = status
 	state.body = body
 }
 
 // SetHeader sets a response header in the request context.
 // If wrapper middleware is not present (state is nil), this is a no-op.
+// If state is frozen (response already written), this is a no-op.
 // Use HasState() to check if wrapper middleware is active.
 func SetHeader(r *http.Request, key, value string) {
 	state := getState(r.Context())
@@ -39,6 +48,9 @@ func SetHeader(r *http.Request, key, value string) {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.frozen {
+		return
+	}
 	if state.headers == nil {
 		state.headers = make(http.Header)
 	}
@@ -47,6 +59,7 @@ func SetHeader(r *http.Request, key, value string) {
 
 // AddHeader adds a response header value in the request context.
 // If wrapper middleware is not present (state is nil), this is a no-op.
+// If state is frozen (response already written), this is a no-op.
 // Use HasState() to check if wrapper middleware is active.
 func AddHeader(r *http.Request, key, value string) {
 	state := getState(r.Context())
@@ -55,6 +68,9 @@ func AddHeader(r *http.Request, key, value string) {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.frozen {
+		return
+	}
 	if state.headers == nil {
 		state.headers = make(http.Header)
 	}
