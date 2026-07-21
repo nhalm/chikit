@@ -3,7 +3,7 @@ module github.com/nhalm/chikit
 go 1.25.0
 
 require (
-	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/nhalm/canonlog v0.3.1
 	github.com/redis/go-redis/v9 v9.19.0
