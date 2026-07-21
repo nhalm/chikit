@@ -202,7 +202,7 @@ func translateErrors(err error, formatter MessageFormatter) []FieldError {
 
 func decodeQuery(r *http.Request, dest any) error {
 	rv := reflect.ValueOf(dest)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("dest must be non-nil pointer to struct")
 	}
 	v := rv.Elem()
